@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-platform-dev-password}
+      POSTGRES_DB: platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform -d platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-train-platform}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-change-this-minio-password}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: infra/mlflow.Dockerfile
+    command:
+      - server
+      - --host=0.0.0.0
+      - --port=5000
+      - --backend-store-uri=postgresql://platform:${POSTGRES_PASSWORD:-platform-dev-password}@postgres:5432/mlflow
+      - --artifacts-destination=s3://mlflow
+      - --serve-artifacts
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-train-platform}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-change-this-minio-password}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  training-pytorch:
+    image: train-platform/pytorch:development
+    build:
+      context: .
+      dockerfile: infra/training/pytorch.Dockerfile
+    profiles: ["training-images"]
+
+  training-ultralytics:
+    image: train-platform/ultralytics:development
+    build:
+      context: .
+      dockerfile: infra/training/ultralytics.Dockerfile
+    profiles: ["training-images"]
+    depends_on:
+      training-pytorch:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
