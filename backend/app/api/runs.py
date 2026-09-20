@@ -115,6 +115,10 @@ def _build_command(template: TrainingTemplate, code: CodeVersion, parameters: di
             "imgsz": int(parameters.get("imgsz", 640)),
             "model": str(parameters.get("model", "yolo11n.pt")),
         }
+        if values["model"] != "yolo11n.pt":
+            raise HTTPException(
+                status_code=422, detail="Only the preloaded yolo11n.pt is supported"
+            )
         if values["epochs"] < 1 or values["batch"] < 1 or values["imgsz"] < 32:
             raise HTTPException(status_code=422, detail="Invalid YOLO training parameters")
         return [
@@ -122,7 +126,7 @@ def _build_command(template: TrainingTemplate, code: CodeVersion, parameters: di
             "detect",
             "train",
             "data=/workspace/dataset/data.yaml",
-            f"model={values['model']}",
+            "model=/opt/models/yolo11n.pt",
             f"epochs={values['epochs']}",
             f"batch={values['batch']}",
             f"imgsz={values['imgsz']}",

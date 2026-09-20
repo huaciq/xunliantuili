@@ -86,6 +86,7 @@ def test_training_run_lifecycle_and_gpu_release() -> None:
         run = response.json()
         assert run["status"] == "draft"
         assert run["command"][:3] == ["yolo", "detect", "train"]
+        assert "model=/opt/models/yolo11n.pt" in run["command"]
 
         submitted = client.post(f"/api/v1/runs/{run['id']}/submit", headers=headers)
         assert submitted.status_code == 200
