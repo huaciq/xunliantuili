@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "vision-train-platform-api"
 version = "0.1.0"
 description = "Control plane API for the vision model training platform"
-requires-python = ">=3.9"
+requires-python = ">=3.11,<3.14"
 dependencies = [
   "alembic==1.16.5",
   "argon2-cffi==25.1.0",
