@@ -94,6 +94,8 @@ docker compose up -d postgres redis minio mlflow
 docker compose exec -T mlflow python -c "import boto3,os; s=boto3.client('s3',endpoint_url=os.environ['MLFLOW_S3_ENDPOINT_URL'],aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY']); names=[b['Name'] for b in s.list_buckets()['Buckets']]; 'mlflow' in names or s.create_bucket(Bucket='mlflow')"
 ```
 
+四个基础设施容器使用 `restart: unless-stopped`。Docker 服务随系统启动后会恢复这些容器；手动停止的容器保持停止。
+
 后端只运行一个 Uvicorn worker，因为当前调度器与 API 位于同一进程。安装 systemd unit：
 
 ```bash
