@@ -21,5 +21,6 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
-infra/training/assets/*.pt
 !infra/training/assets/yolo11n.pt
+infra/training/assets/*.pt
+
