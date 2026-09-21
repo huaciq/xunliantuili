@@ -79,9 +79,10 @@ def test_parse_nvidia_smi_supports_lab_gpu_models() -> None:
     devices = parse_nvidia_smi(
         "0, GPU-a, NVIDIA GeForce RTX 3090, 24576\n"
         "1, GPU-b, NVIDIA GeForce RTX 4090, 24564\n"
-        "2, GPU-c, NVIDIA A100, 81920\n"
+        "2, GPU-c, Tesla T4, 15360\n"
     )
     assert [(item.index, item.uuid, item.model.value) for item in devices] == [
         (0, "GPU-a", "rtx_3090"),
         (1, "GPU-b", "rtx_4090"),
+        (2, "GPU-c", "tesla_t4"),
     ]

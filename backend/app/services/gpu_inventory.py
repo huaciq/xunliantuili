@@ -31,6 +31,8 @@ def parse_nvidia_smi(output: str) -> list[DiscoveredGpu]:
             model = GpuModelPolicy.RTX_3090
         elif "4090" in normalized:
             model = GpuModelPolicy.RTX_4090
+        elif "tesla t4" in normalized or normalized.endswith(" t4"):
+            model = GpuModelPolicy.TESLA_T4
         else:
             continue
         devices.append(

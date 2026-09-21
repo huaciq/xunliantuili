@@ -7,8 +7,8 @@
 
 平台服务于单台四 GPU 服务器，当前 GPU 组成：
 
-- 2 x NVIDIA RTX 3090
-- 2 x NVIDIA RTX 4090
+- 当前服务器：2 x NVIDIA RTX 3090 + 1 x Tesla T4
+- 目标扩展：增加 RTX 4090 后按 GPU UUID 动态登记
 
 平台面向实验室成员，提供以下闭环：
 
@@ -283,7 +283,7 @@ CANDIDATE -> VALIDATED -> RELEASED -> ARCHIVED
 任务可声明：
 
 - `gpu_count`：0、1、2 或 4。
-- `gpu_model_policy`：`ANY`、`RTX_3090`、`RTX_4090`。
+- `gpu_model_policy`：`ANY`、`RTX_3090`、`RTX_4090`、`TESLA_T4`。
 - `min_gpu_memory_gb`。
 - `cpu_limit`。
 - `memory_limit_gb`。
@@ -292,8 +292,8 @@ CANDIDATE -> VALIDATED -> RELEASED -> ARCHIVED
 ### 6.3 异构卡规则
 
 - 单卡任务默认选择满足条件的空闲 GPU。
-- 双卡任务默认要求同型号 GPU，因此可分配两张 3090 或两张 4090。
-- 默认禁止把 3090 和 4090 放进同一个分布式训练任务。
+- 双卡任务默认要求同型号 GPU，因此当前可分配两张 3090；未来可分配两张 4090。
+- 默认禁止把 3090、4090 和 T4 放进同一个分布式训练任务。
 - 四卡异构训练仅允许管理员显式开启，并向用户展示性能和兼容性警告。
 - 4090 优先分配给明确要求 4090 的任务；`ANY` 任务优先使用当前更容易形成连续同型组合的卡组。
 

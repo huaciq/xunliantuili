@@ -5,7 +5,7 @@
 - Linux 服务器可正常执行 `nvidia-smi`。
 - Docker Engine 已安装并由 NVIDIA Container Toolkit 配置 GPU runtime。
 - 运行后端的系统用户可执行 Docker，并对平台存储目录具有读写权限。
-- 服务器 GPU 为 2 张 RTX 3090 和 2 张 RTX 4090。
+- 当前服务器可以是 2 张 RTX 3090 + 1 张 Tesla T4；后续增加 RTX 4090 或其他已适配型号时，GPU 会按 UUID 自动登记。
 
 先执行预检：
 

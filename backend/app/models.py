@@ -71,6 +71,7 @@ class GpuModelPolicy(str, enum.Enum):
     ANY = "any"
     RTX_3090 = "rtx_3090"
     RTX_4090 = "rtx_4090"
+    TESLA_T4 = "tesla_t4"
 
 
 class ModelStage(str, enum.Enum):

@@ -153,6 +153,13 @@ function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
 }
 
+function gpuModelLabel(model: GpuModelPolicy): string {
+  if (model === 'rtx_3090') return 'RTX 3090'
+  if (model === 'rtx_4090') return 'RTX 4090'
+  if (model === 'tesla_t4') return 'Tesla T4'
+  return '自动'
+}
+
 onMounted(load)
 </script>
 
@@ -171,7 +178,7 @@ onMounted(load)
 
     <div class="gpu-strip">
       <div v-for="gpu in gpus" :key="gpu.id" :class="{ busy: gpu.allocated_run_id }">
-        <Cpu :size="18" /><strong>GPU {{ gpu.index }}</strong><span>{{ gpu.model.replace('rtx_', 'RTX ') }} · {{ gpu.memory_gb }} GB</span><NTag size="small" :type="gpu.allocated_run_id ? 'warning' : 'success'">{{ gpu.allocated_run_id ? '占用' : '空闲' }}</NTag>
+        <Cpu :size="18" /><strong>GPU {{ gpu.index }}</strong><span>{{ gpuModelLabel(gpu.model) }} · {{ gpu.memory_gb }} GB</span><NTag size="small" :type="gpu.allocated_run_id ? 'warning' : 'success'">{{ gpu.allocated_run_id ? '占用' : '空闲' }}</NTag>
       </div>
     </div>
 
@@ -193,7 +200,7 @@ onMounted(load)
           <NFormItem label="数据集版本"><NSelect v-model:value="form.dataset_version_id" :options="datasetOptions" /></NFormItem>
           <NFormItem label="代码版本"><NSelect v-model:value="form.code_version_id" :options="codeOptions" /></NFormItem>
           <NFormItem label="运行镜像"><NSelect v-model:value="form.runtime_image_id" :options="runtimes.map((item) => ({ label: `${item.name} · ${item.framework}`, value: item.id }))" /></NFormItem>
-          <NFormItem label="GPU 型号"><NSelect v-model:value="form.requested_gpu_model" :options="[{ label: '自动选择同型号卡', value: 'any' }, { label: 'RTX 3090', value: 'rtx_3090' }, { label: 'RTX 4090', value: 'rtx_4090' }]" /></NFormItem>
+          <NFormItem label="GPU 型号"><NSelect v-model:value="form.requested_gpu_model" :options="[{ label: '自动选择同型号卡', value: 'any' }, { label: 'RTX 3090', value: 'rtx_3090' }, { label: 'RTX 4090', value: 'rtx_4090' }, { label: 'Tesla T4', value: 'tesla_t4' }]" /></NFormItem>
           <NFormItem label="GPU 数量"><NSelect v-model:value="form.requested_gpu_count" :options="[{ label: 'CPU', value: 0 }, { label: '1 张', value: 1 }, { label: '2 张', value: 2 }]" /></NFormItem>
           <NFormItem label="优先级"><NInputNumber v-model:value="form.priority" :min="-10" :max="10" /></NFormItem>
         </div>

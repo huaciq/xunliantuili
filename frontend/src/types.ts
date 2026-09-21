@@ -93,7 +93,7 @@ export type TrainingRunStatus =
   | 'stopped'
   | 'succeeded'
   | 'failed'
-export type GpuModelPolicy = 'any' | 'rtx_3090' | 'rtx_4090'
+export type GpuModelPolicy = 'any' | 'rtx_3090' | 'rtx_4090' | 'tesla_t4'
 
 export interface TrainingTemplate {
   id: string
