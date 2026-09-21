@@ -1,0 +1,27 @@
+[Unit]
+Description=Vision Training Platform API and Scheduler
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=huaciq
+Group=huaciq
+SupplementaryGroups=docker
+WorkingDirectory=/home/zxy/workspace/xunliantuili/backend
+EnvironmentFile=/home/zxy/workspace/xunliantuili/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/zxy/workspace/xunliantuili/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+KillSignal=SIGINT
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/srv/train-platform/storage
+
+[Install]
+WantedBy=multi-user.target

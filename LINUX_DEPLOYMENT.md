@@ -84,3 +84,48 @@ runs/{project}/{run}/output -> /workspace/output   可写
 ```
 
 容器启动时应用 `no-new-privileges`、`cap-drop=ALL`、非 root UID、CPU/内存/PID 限制，并且不挂载 Docker socket。
+
+## 生产服务
+
+基础设施端口默认只监听 `127.0.0.1`。启动服务并创建 MLflow bucket：
+
+```bash
+docker compose up -d postgres redis minio mlflow
+docker compose exec -T mlflow python -c "import boto3,os; s=boto3.client('s3',endpoint_url=os.environ['MLFLOW_S3_ENDPOINT_URL'],aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY']); names=[b['Name'] for b in s.list_buckets()['Buckets']]; 'mlflow' in names or s.create_bucket(Bucket='mlflow')"
+```
+
+后端只运行一个 Uvicorn worker，因为当前调度器与 API 位于同一进程。安装 systemd unit：
+
+```bash
+sudo cp deploy/systemd/train-platform-api.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now train-platform-api
+sudo systemctl status train-platform-api
+```
+
+构建前端并安装 Nginx 配置：
+
+```bash
+cd frontend
+npm ci
+npm run build
+sudo install -d -m 0755 /var/www/train-platform
+sudo rsync -a --delete dist/ /var/www/train-platform/
+cd ..
+sudo cp deploy/nginx/train-platform.conf /etc/nginx/sites-available/train-platform
+sudo ln -sfn /etc/nginx/sites-available/train-platform /etc/nginx/sites-enabled/train-platform
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+```
+
+生产环境更新：
+
+```bash
+git pull --ff-only origin main
+cd backend && uv sync --frozen && uv run alembic upgrade head && cd ..
+cd frontend && npm ci && npm run build && sudo rsync -a --delete dist/ /var/www/train-platform/ && cd ..
+sudo systemctl restart train-platform-api
+curl -fsS http://127.0.0.1:8000/api/v1/health
+```

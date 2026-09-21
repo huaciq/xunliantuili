@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-platform-dev-password}
       POSTGRES_DB: platform
     ports:
-      - "5432:5432"
+      - "${PLATFORM_BIND_ADDRESS:-127.0.0.1}:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
@@ -20,7 +20,7 @@ services:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "${PLATFORM_BIND_ADDRESS:-127.0.0.1}:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -36,8 +36,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-train-platform}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-change-this-minio-password}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${PLATFORM_BIND_ADDRESS:-127.0.0.1}:9000:9000"
+      - "${PLATFORM_BIND_ADDRESS:-127.0.0.1}:9001:9001"
     volumes:
       - minio-data:/data
 
@@ -57,7 +57,7 @@ services:
       AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-change-this-minio-password}
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
     ports:
-      - "5000:5000"
+      - "${PLATFORM_BIND_ADDRESS:-127.0.0.1}:5000:5000"
     depends_on:
       postgres:
         condition: service_healthy
