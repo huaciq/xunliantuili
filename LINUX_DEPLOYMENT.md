@@ -15,28 +15,18 @@ bash scripts/linux-preflight.sh
 
 ## 构建训练镜像
 
-Ultralytics 构建不在 Docker 内访问 GitHub。先在服务器准备接收目录：
+Ultralytics 构建不在 Docker 内访问 GitHub。官方 `yolo11n.pt` 基础权重作为固定构建资产随仓库分发；拉取代码后可先校验文件：
 
 ```bash
 cd /home/zxy/workspace/xunliantuili
-mkdir -p infra/training/assets
-```
-
-再在能够访问 GitHub 的电脑下载官方权重并传到服务器：
-
-```powershell
-Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n.pt" -OutFile ".\yolo11n.pt"
-Get-FileHash .\yolo11n.pt -Algorithm SHA256
-scp .\yolo11n.pt <server-user>@<server-host>:/home/zxy/workspace/xunliantuili/infra/training/assets/yolo11n.pt
-```
-
-在服务器上检查文件。`sha256sum` 应与下载电脑上 `Get-FileHash` 的结果一致：
-
-```bash
-cd /home/zxy/workspace/xunliantuili
-chmod 0644 infra/training/assets/yolo11n.pt
 sha256sum infra/training/assets/yolo11n.pt
 ls -lh infra/training/assets/yolo11n.pt
+```
+
+预期 SHA256 为：
+
+```text
+0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1
 ```
 
 然后构建训练镜像：
