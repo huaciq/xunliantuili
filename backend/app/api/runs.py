@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+from pathlib import Path, PurePosixPath
 
 import jwt
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.projects import ensure_project_access, load_project
+from app.config import settings
 from app.database import SessionLocal
 from app.deps import CurrentUser, DbSession
 from app.models import (
@@ -39,7 +41,7 @@ from app.schemas import (
     TrainingTemplateView,
 )
 from app.security import decode_access_token
-from app.services.scheduler import scheduler
+from app.services.scheduler import _resolve_storage_path, scheduler
 
 router = APIRouter(tags=["训练任务"])
 
@@ -107,8 +109,40 @@ def _run_view(run: TrainingRun) -> TrainingRunView:
     )
 
 
-def _build_command(template: TrainingTemplate, code: CodeVersion, parameters: dict) -> list[str]:
+def _find_yolo_dataset_config(dataset_root: Path) -> PurePosixPath:
+    candidates = sorted(
+        path
+        for path in dataset_root.rglob("*")
+        if path.is_file() and path.name.lower() in {"data.yaml", "data.yml"}
+    )
+    if not candidates:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected dataset does not contain data.yaml or data.yml",
+        )
+    if len(candidates) > 1:
+        relative_paths = [path.relative_to(dataset_root).as_posix() for path in candidates[:10]]
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The selected dataset contains multiple YOLO configuration files: "
+                + ", ".join(relative_paths)
+            ),
+        )
+    relative_path = candidates[0].relative_to(dataset_root)
+    return PurePosixPath("/workspace/dataset") / PurePosixPath(relative_path.as_posix())
+
+
+def _build_command(
+    template: TrainingTemplate,
+    code: CodeVersion,
+    dataset: DatasetVersion,
+    parameters: dict,
+) -> list[str]:
     if template.key == "yolo_detection":
+        storage_root = Path(settings.storage_root).resolve()
+        dataset_root = _resolve_storage_path(storage_root, dataset.cache_uri)
+        data_config = _find_yolo_dataset_config(dataset_root)
         values = {
             "epochs": int(parameters.get("epochs", 100)),
             "batch": int(parameters.get("batch", 16)),
@@ -125,7 +159,7 @@ def _build_command(template: TrainingTemplate, code: CodeVersion, parameters: di
             "yolo",
             "detect",
             "train",
-            "data=/workspace/dataset/data.yaml",
+            f"data={data_config}",
             "model=/opt/models/yolo11n.pt",
             f"epochs={values['epochs']}",
             f"batch={values['batch']}",
@@ -225,7 +259,7 @@ def create_run(
         raise HTTPException(status_code=422, detail="Runtime image is not available")
     if payload.requested_gpu_count == 4 and payload.requested_gpu_model == "any":
         raise HTTPException(status_code=422, detail="Four-GPU heterogeneous training is disabled")
-    command = _build_command(template, code_version, payload.parameters)
+    command = _build_command(template, code_version, dataset_version, payload.parameters)
     run = TrainingRun(
         project_id=project_id,
         name=payload.name.strip(),

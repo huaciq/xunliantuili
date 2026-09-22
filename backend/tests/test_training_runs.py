@@ -38,7 +38,12 @@ def _ready_resources(
         files={
             "file": (
                 "dataset.zip",
-                _zip({"data.yaml": "train: images", "images/a.jpg": "image"}),
+                _zip(
+                    {
+                        "wrapped-dataset/data.yaml": "train: images",
+                        "wrapped-dataset/images/a.jpg": "image",
+                    }
+                ),
                 "application/zip",
             )
         },
@@ -86,6 +91,7 @@ def test_training_run_lifecycle_and_gpu_release() -> None:
         run = response.json()
         assert run["status"] == "draft"
         assert run["command"][:3] == ["yolo", "detect", "train"]
+        assert "data=/workspace/dataset/wrapped-dataset/data.yaml" in run["command"]
         assert "model=/opt/models/yolo11n.pt" in run["command"]
 
         submitted = client.post(f"/api/v1/runs/{run['id']}/submit", headers=headers)
