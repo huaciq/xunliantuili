@@ -40,6 +40,10 @@ docker compose --profile training-images build training-ultralytics
 
 Ultralytics 镜像会安装 OpenCV 所需的 `libxcb1`、`libgl1` 和相关最小运行库，将离线权重复制到 `/opt/models/yolo11n.pt`，并在构建期实际加载模型。因此构建成功本身也是一次依赖和权重完整性检查。
 
+镜像同时把兼容字体预装到 `/opt/ultralytics`，并将该目录配置为可写的
+`YOLO_CONFIG_DIR`。训练容器不需要联网下载 `Arial.ttf`，使用宿主机映射 UID
+运行时也不会写入镜像构建阶段遗留的 `/tmp/Ultralytics`。
+
 镜像名称与平台初始化目录一致：
 
 ```text
