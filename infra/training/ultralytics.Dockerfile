@@ -29,7 +29,8 @@ RUN echo "${YOLO11N_SHA256}  /opt/models/yolo11n.pt" | sha256sum --check --stric
     && chmod 0644 /opt/models/yolo11n.pt \
     && python -c "from ultralytics import YOLO; YOLO('/opt/models/yolo11n.pt'); print('yolo11n.pt loaded successfully')" \
     && rm -rf /tmp/Ultralytics \
-    && chmod -R a+rwX /opt/ultralytics
+    && chmod -R a+rwX /opt/ultralytics \
+    && ln -s /opt/ultralytics /tmp/Ultralytics
 USER train
 
 RUN python -c "from pathlib import Path; from ultralytics.utils import USER_CONFIG_DIR; p = Path(USER_CONFIG_DIR); probe = p / '.write-test'; probe.write_text('ok'); probe.unlink(); assert (p / 'Arial.ttf').is_file(); print(f'Ultralytics config ready: {p}')"

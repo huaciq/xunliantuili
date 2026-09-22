@@ -42,7 +42,8 @@ Ultralytics 镜像会安装 OpenCV 所需的 `libxcb1`、`libgl1` 和相关最�
 
 镜像同时把兼容字体预装到 `/opt/ultralytics`，并将该目录配置为可写的
 `YOLO_CONFIG_DIR`。训练容器不需要联网下载 `Arial.ttf`，使用宿主机映射 UID
-运行时也不会写入镜像构建阶段遗留的 `/tmp/Ultralytics`。
+运行时也不会写入镜像构建阶段遗留的只读目录。为兼容仍回退到
+`/tmp/Ultralytics` 的版本，镜像会将该路径链接到同一个可写配置目录。
 
 镜像名称与平台初始化目录一致：
 
