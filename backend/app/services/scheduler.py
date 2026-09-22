@@ -46,6 +46,21 @@ def _resolve_storage_path(storage_root: Path, uri: str) -> Path:
     return resolved
 
 
+def _yolo_workdir(command: list[str]) -> str:
+    data_arguments = [
+        argument.removeprefix("data=")
+        for argument in command
+        if argument.startswith("data=")
+    ]
+    if len(data_arguments) != 1:
+        raise ValueError("YOLO command must contain exactly one data configuration argument")
+    config_path = PurePosixPath(data_arguments[0])
+    dataset_root = PurePosixPath("/workspace/dataset")
+    if not config_path.is_absolute() or not config_path.is_relative_to(dataset_root):
+        raise ValueError("YOLO data configuration must be inside /workspace/dataset")
+    return str(config_path.parent)
+
+
 class TrainingScheduler:
     def __init__(self) -> None:
         if settings.executor_backend == "docker":
@@ -151,6 +166,7 @@ class TrainingScheduler:
                 select(TrainingRun)
                 .where(TrainingRun.status == TrainingRunStatus.QUEUED)
                 .options(
+                    selectinload(TrainingRun.template),
                     selectinload(TrainingRun.runtime_image),
                     selectinload(TrainingRun.dataset_version),
                     selectinload(TrainingRun.code_version),
@@ -318,10 +334,13 @@ class TrainingScheduler:
         (config_root / "run.json").write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        relative_workdir = PurePosixPath(run.code_version.default_workdir or ".")
-        if relative_workdir.is_absolute() or ".." in relative_workdir.parts:
-            raise ValueError("Code workdir must be a relative path without parent traversal")
-        workdir = str(PurePosixPath("/workspace/code") / relative_workdir)
+        if run.template.key == "yolo_detection":
+            workdir = _yolo_workdir(run.command)
+        else:
+            relative_workdir = PurePosixPath(run.code_version.default_workdir or ".")
+            if relative_workdir.is_absolute() or ".." in relative_workdir.parts:
+                raise ValueError("Code workdir must be a relative path without parent traversal")
+            workdir = str(PurePosixPath("/workspace/code") / relative_workdir)
         return ExecutionSpec(
             run_id=run.id,
             image=run.runtime_image.image,
