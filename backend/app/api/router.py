@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api import auth, health, projects, registry, resources, runs, users
+from app.api import auth, health, projects, registry, resources, runs, runtime_images, users
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
@@ -10,3 +10,4 @@ api_router.include_router(projects.router)
 api_router.include_router(resources.router)
 api_router.include_router(runs.router)
 api_router.include_router(registry.router)
+api_router.include_router(runtime_images.router)

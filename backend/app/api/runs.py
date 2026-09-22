@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 from pathlib import Path, PurePosixPath
 
@@ -18,6 +19,7 @@ from app.models import (
     CodePackage,
     CodeVersion,
     Dataset,
+    DatasetFormat,
     DatasetVersion,
     GpuAllocation,
     GpuDevice,
@@ -133,6 +135,145 @@ def _find_yolo_dataset_config(dataset_root: Path) -> PurePosixPath:
     return PurePosixPath("/workspace/dataset") / PurePosixPath(relative_path.as_posix())
 
 
+MVTEC_CATEGORIES = {
+    "bottle",
+    "cable",
+    "capsule",
+    "carpet",
+    "grid",
+    "hazelnut",
+    "leather",
+    "metal_nut",
+    "pill",
+    "screw",
+    "tile",
+    "toothbrush",
+    "transistor",
+    "wood",
+    "zipper",
+}
+
+INPFORMER_ENCODER_WEIGHTS = {
+    "dinov2reg_vit_small_14": "dinov2_vits14_reg4_pretrain.pth",
+    "dinov2reg_vit_base_14": "dinov2_vitb14_reg4_pretrain.pth",
+    "dinov2reg_vit_large_14": "dinov2_vitl14_reg4_pretrain.pth",
+}
+
+
+def _safe_relative_path(value: str, label: str) -> PurePosixPath:
+    path = PurePosixPath(value or ".")
+    if path.is_absolute() or ".." in path.parts:
+        raise HTTPException(status_code=422, detail=f"{label} must be a safe relative path")
+    return path
+
+
+def _build_inpformer_command(
+    code: CodeVersion, dataset: DatasetVersion, parameters: dict
+) -> list[str]:
+    if dataset.format != DatasetFormat.MVTEC_AD:
+        raise HTTPException(status_code=422, detail="INP-Former requires an MVTec AD dataset")
+    storage_root = Path(settings.storage_root).resolve()
+    dataset_cache = _resolve_storage_path(storage_root, dataset.cache_uri)
+    dataset_subpath = _safe_relative_path(dataset.root_subpath, "Dataset root")
+    dataset_root = dataset_cache.joinpath(*dataset_subpath.parts)
+    missing_categories = sorted(
+        category
+        for category in MVTEC_CATEGORIES
+        if not (dataset_root / category / "train").is_dir()
+        or not (dataset_root / category / "test").is_dir()
+        or not (dataset_root / category / "ground_truth").is_dir()
+    )
+    if missing_categories:
+        raise HTTPException(
+            status_code=422,
+            detail="MVTec AD dataset is incomplete; missing category structure: "
+            + ", ".join(missing_categories),
+        )
+
+    entrypoint = code.default_entrypoint.strip()
+    if not entrypoint:
+        raise HTTPException(status_code=422, detail="The code version has no default entrypoint")
+    try:
+        command = shlex.split(entrypoint, posix=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid entrypoint syntax: {exc}") from exc
+    if len(command) < 2 or command[0] not in {"python", "python3"}:
+        raise HTTPException(
+            status_code=422,
+            detail="INP-Former entrypoint must look like: python INP_Former_Multi_Class.py",
+        )
+    workdir = _safe_relative_path(code.default_workdir, "Code workdir")
+    script_path = _safe_relative_path(command[1], "Entrypoint script")
+    code_cache = _resolve_storage_path(storage_root, code.cache_uri)
+    code_workdir = code_cache.joinpath(*workdir.parts)
+    if not code_workdir.joinpath(*script_path.parts).is_file():
+        raise HTTPException(status_code=422, detail=f"Entrypoint script not found: {command[1]}")
+
+    encoder = str(parameters.get("encoder", "dinov2reg_vit_base_14"))
+    weight_name = INPFORMER_ENCODER_WEIGHTS.get(encoder)
+    if weight_name is None:
+        raise HTTPException(status_code=422, detail="Unsupported INP-Former encoder")
+    weight_path = code_workdir / "backbones" / "weights" / weight_name
+    if not weight_path.is_file():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Required backbone weight is missing: backbones/weights/{weight_name}. "
+                "Include it in the code package because the code mount is read-only."
+            ),
+        )
+
+    try:
+        values = {
+            "epochs": int(parameters.get("epochs", 50)),
+            "batch_size": int(parameters.get("batch_size", 16)),
+            "input_size": int(parameters.get("input_size", 448)),
+            "crop_size": int(parameters.get("crop_size", 392)),
+            "inp_num": int(parameters.get("inp_num", 6)),
+        }
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422, detail="Invalid INP-Former training parameters"
+        ) from exc
+    if (
+        values["epochs"] < 1
+        or values["batch_size"] < 1
+        or values["inp_num"] < 1
+        or values["input_size"] < 32
+        or values["crop_size"] < 32
+        or values["crop_size"] > values["input_size"]
+    ):
+        raise HTTPException(status_code=422, detail="Invalid INP-Former training parameters")
+    save_name = str(parameters.get("save_name", "inpformer")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", save_name):
+        raise HTTPException(status_code=422, detail="Invalid INP-Former save name")
+    container_data_root = PurePosixPath("/workspace/dataset") / dataset_subpath
+    return command + [
+        "--dataset",
+        "MVTec-AD",
+        "--data_path",
+        str(container_data_root),
+        "--phase",
+        "train",
+        "--save_dir",
+        "/workspace/output",
+        "--save_name",
+        save_name,
+        "--total_epochs",
+        str(values["epochs"]),
+        "--batch_size",
+        str(values["batch_size"]),
+        "--input_size",
+        str(values["input_size"]),
+        "--crop_size",
+        str(values["crop_size"]),
+        "--INP_num",
+        str(values["inp_num"]),
+        "--encoder",
+        encoder,
+    ]
+
+
 def _build_command(
     template: TrainingTemplate,
     code: CodeVersion,
@@ -170,6 +311,8 @@ def _build_command(
             "project=/workspace/output",
             "name=train",
         ]
+    if template.key == "inpformer_multiclass":
+        return _build_inpformer_command(code, dataset, parameters)
     entrypoint = code.default_entrypoint.strip()
     if not entrypoint:
         raise HTTPException(status_code=422, detail="The code version has no default entrypoint")
@@ -260,6 +403,12 @@ def create_run(
     runtime = db.get(RuntimeImage, runtime_id)
     if runtime is None or not runtime.is_active:
         raise HTTPException(status_code=422, detail="Runtime image is not available")
+    required_framework = template.parameter_schema.get("runtime_framework")
+    if required_framework and runtime.framework != required_framework:
+        raise HTTPException(
+            status_code=422,
+            detail=f"This template requires a {required_framework} runtime image",
+        )
     if payload.requested_gpu_count == 4 and payload.requested_gpu_model == "any":
         raise HTTPException(status_code=422, detail="Four-GPU heterogeneous training is disabled")
     command = _build_command(template, code_version, dataset_version, payload.parameters)

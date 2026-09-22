@@ -31,6 +31,7 @@ const router = createRouter({
         },
         { path: 'runs/:runId', component: () => import('./views/TrainingRunDetailView.vue') },
         { path: 'users', component: () => import('./views/UsersView.vue') },
+        { path: 'runtime-images', component: () => import('./views/RuntimeImagesView.vue') },
       ],
     },
   ],

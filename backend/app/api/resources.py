@@ -205,6 +205,7 @@ async def upload_dataset_version(
         )
         version.archive_uri = result.archive_uri
         version.cache_uri = result.cache_uri
+        version.root_subpath = result.dataset_root_subpath
         version.manifest_uri = result.manifest_uri
         version.extracted_size = result.extracted_size
         version.file_count = result.file_count

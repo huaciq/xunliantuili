@@ -29,7 +29,7 @@ export interface Project {
 }
 
 export type ResourceVersionStatus = 'processing' | 'ready' | 'failed'
-export type DatasetFormat = 'yolo' | 'coco' | 'classification' | 'generic'
+export type DatasetFormat = 'yolo' | 'coco' | 'classification' | 'mvtec_ad' | 'generic'
 
 export interface DatasetVersion {
   id: string
@@ -37,6 +37,7 @@ export interface DatasetVersion {
   version: number
   status: ResourceVersionStatus
   format: DatasetFormat
+  root_subpath: string
   source_filename: string
   sha256: string
   archive_size: number
@@ -101,7 +102,7 @@ export interface TrainingTemplate {
   name: string
   description: string
   default_runtime_image_id: string
-  parameter_schema: Record<string, { type: string; default: string | number; minimum?: number }>
+  parameter_schema: Record<string, unknown>
 }
 
 export interface RuntimeImage {
@@ -110,6 +111,8 @@ export interface RuntimeImage {
   image: string
   digest: string
   framework: string
+  is_active: boolean
+  created_at: string
 }
 
 export interface GpuDevice {

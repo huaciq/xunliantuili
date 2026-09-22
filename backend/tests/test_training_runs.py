@@ -119,6 +119,7 @@ def test_training_run_lifecycle_and_gpu_release() -> None:
         gpus = client.get("/api/v1/resources/gpus", headers=headers).json()
         assert all(gpu["allocated_run_id"] is None for gpu in gpus)
 
+
         metrics = client.get(f"/api/v1/runs/{run['id']}/metrics", headers=headers).json()
         assert len(metrics) == 20
         assert {point["key"] for point in metrics} == {
@@ -211,3 +212,80 @@ def test_training_run_lifecycle_and_gpu_release() -> None:
         assert any("Execution stopped" in line for line in stop_logs["lines"])
         gpus = client.get("/api/v1/resources/gpus", headers=headers).json()
         assert all(gpu["allocated_run_id"] is None for gpu in gpus)
+
+
+def test_inpformer_template_builds_structured_multiclass_command() -> None:
+    categories = [
+        "bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather",
+        "metal_nut", "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper",
+    ]
+    with TestClient(app) as client:
+        headers = _headers(client)
+        suffix = uuid.uuid4().hex[:8]
+        project = client.post(
+            "/api/v1/projects", headers=headers,
+            json={"name": f"INP {suffix}", "description": "INP-Former command test"},
+        ).json()
+        dataset = client.post(
+            f"/api/v1/projects/{project['id']}/datasets", headers=headers,
+            json={"name": "MVTec AD", "description": "All categories"},
+        ).json()
+        dataset_files: dict[str, str] = {}
+        for category in categories:
+            dataset_files[f"wrapped/mvtec/{category}/train/good/001.png"] = "image"
+            dataset_files[f"wrapped/mvtec/{category}/test/defect/001.png"] = "image"
+            dataset_files[f"wrapped/mvtec/{category}/ground_truth/defect/001_mask.png"] = "mask"
+        dataset_version = client.post(
+            f"/api/v1/datasets/{dataset['id']}/versions/upload", headers=headers,
+            files={"file": ("mvtec.zip", _zip(dataset_files), "application/zip")},
+        ).json()["versions"][0]
+        assert dataset_version["format"] == "mvtec_ad"
+        assert dataset_version["root_subpath"] == "wrapped/mvtec"
+
+        code = client.post(
+            f"/api/v1/projects/{project['id']}/code-packages", headers=headers,
+            json={"name": "INP-Former", "description": "Official training entrypoint"},
+        ).json()
+        code_version = client.post(
+            f"/api/v1/code-packages/{code['id']}/versions/upload", headers=headers,
+            data={
+                "default_workdir": "repo",
+                "default_entrypoint": "python INP_Former_Multi_Class.py",
+            },
+            files={"file": ("inpformer.zip", _zip({
+                "repo/INP_Former_Multi_Class.py": "print('train')",
+                "repo/backbones/weights/dinov2_vitb14_reg4_pretrain.pth": "weight",
+            }), "application/zip")},
+        ).json()["versions"][0]
+        runtime = client.post(
+            "/api/v1/admin/runtime-images", headers=headers,
+            json={
+                "name": f"INP-Former {suffix}",
+                "image": f"train-platform/inpformer:{suffix}",
+                "framework": "inpformer",
+            },
+        ).json()
+        templates = client.get("/api/v1/training-templates", headers=headers).json()
+        template = next(item for item in templates if item["key"] == "inpformer_multiclass")
+        response = client.post(
+            f"/api/v1/projects/{project['id']}/runs", headers=headers,
+            json={
+                "name": "INP-Former baseline",
+                "template_id": template["id"],
+                "dataset_version_id": dataset_version["id"],
+                "code_version_id": code_version["id"],
+                "runtime_image_id": runtime["id"],
+                "parameters": {
+                    "epochs": 3, "batch_size": 2, "input_size": 448, "crop_size": 392,
+                    "inp_num": 6, "encoder": "dinov2reg_vit_base_14", "save_name": "baseline",
+                },
+                "requested_gpu_count": 1,
+                "requested_gpu_model": "rtx_3090",
+            },
+        )
+        assert response.status_code == 201
+        command = response.json()["command"]
+        assert command[:2] == ["python", "INP_Former_Multi_Class.py"]
+        assert command[command.index("--data_path") + 1] == "/workspace/dataset/wrapped/mvtec"
+        assert command[command.index("--save_dir") + 1] == "/workspace/output"
+        assert command[command.index("--total_epochs") + 1] == "3"

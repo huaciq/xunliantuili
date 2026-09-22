@@ -114,3 +114,39 @@ def test_archive_path_traversal_is_rejected() -> None:
         )
         assert response.status_code == 400
         assert "Unsafe archive path" in response.json()["detail"]
+
+
+def test_mvtec_dataset_root_is_detected_inside_wrapper() -> None:
+    with TestClient(app) as client:
+        headers = _login(client)
+        suffix = uuid.uuid4().hex[:8]
+        project = client.post(
+            "/api/v1/projects",
+            headers=headers,
+            json={"name": f"MVTec {suffix}", "description": "Anomaly detection"},
+        ).json()
+        dataset = client.post(
+            f"/api/v1/projects/{project['id']}/datasets",
+            headers=headers,
+            json={"name": "MVTec AD", "description": "Wrapped dataset"},
+        ).json()
+        archive = _zip_bytes(
+            {
+                "download/mvtec/bottle/train/good/001.png": "image",
+                "download/mvtec/bottle/test/broken/001.png": "image",
+                "download/mvtec/bottle/ground_truth/broken/001_mask.png": "mask",
+            }
+        )
+        response = client.post(
+            f"/api/v1/datasets/{dataset['id']}/versions/upload",
+            headers=headers,
+            files={"file": ("mvtec.zip", archive, "application/zip")},
+        )
+        assert response.status_code == 200
+        version = response.json()["versions"][0]
+        assert version["format"] == "mvtec_ad"
+        assert version["root_subpath"] == "download/mvtec"
+        manifest = client.get(
+            f"/api/v1/dataset-versions/{version['id']}/manifest", headers=headers
+        ).json()
+        assert manifest["dataset_root_subpath"] == "download/mvtec"

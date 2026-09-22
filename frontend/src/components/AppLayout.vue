@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Boxes, Cpu, Database, FileArchive, FolderKanban, LogOut, Menu, Package, Users } from 'lucide-vue-next'
+import { Boxes, Container, Cpu, Database, FileArchive, FolderKanban, LogOut, Menu, Package, Users } from 'lucide-vue-next'
 import { NButton, NDrawer, NDrawerContent } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -44,6 +44,7 @@ const navigation = computed(() => [
     disabled: !selectedProjectId.value,
   },
   { label: '用户', path: '/users', icon: Users, visible: auth.isAdmin },
+  { label: '运行镜像', path: '/runtime-images', icon: Container, visible: auth.isAdmin },
 ])
 
 function go(path: string, disabled?: boolean) {

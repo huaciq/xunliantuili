@@ -51,6 +51,7 @@ class DatasetFormat(str, enum.Enum):
     YOLO = "yolo"
     COCO = "coco"
     CLASSIFICATION = "classification"
+    MVTEC_AD = "mvtec_ad"
     GENERIC = "generic"
 
 
@@ -190,6 +191,7 @@ class DatasetVersion(Base):
     source_filename: Mapped[str] = mapped_column(String(255))
     archive_uri: Mapped[str] = mapped_column(String(1000), default="")
     cache_uri: Mapped[str] = mapped_column(String(1000), default="")
+    root_subpath: Mapped[str] = mapped_column(String(1000), default=".")
     manifest_uri: Mapped[str] = mapped_column(String(1000), default="")
     sha256: Mapped[str] = mapped_column(String(64), default="")
     archive_size: Mapped[int] = mapped_column(BigInteger, default=0)

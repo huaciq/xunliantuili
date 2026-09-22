@@ -120,6 +120,7 @@ class DatasetVersionView(BaseModel):
     version: int = Field(description="版本号，从 1 开始递增")
     status: ResourceVersionStatus = Field(description="处理状态")
     format: DatasetFormat = Field(description="识别出的数据集格式")
+    root_subpath: str = Field(description="数据集在解压目录中的根路径")
     source_filename: str = Field(description="上传时的原始文件名")
     sha256: str = Field(description="压缩包 SHA-256 摘要")
     archive_size: int = Field(description="压缩包大小，单位为字节")
@@ -185,6 +186,24 @@ class RuntimeImageView(BaseModel):
     image: str
     digest: str
     framework: str
+    is_active: bool
+    created_at: datetime
+
+
+class RuntimeImageCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    image: str = Field(min_length=1, max_length=500)
+    digest: str = Field(default="development", min_length=1, max_length=255)
+    framework: str = Field(default="pytorch", min_length=1, max_length=80)
+    is_active: bool = True
+
+
+class RuntimeImageUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    image: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    digest: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    framework: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    is_active: Optional[bool] = None
 
 
 class TrainingTemplateView(BaseModel):

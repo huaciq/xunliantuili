@@ -46,6 +46,19 @@ def ensure_development_catalog() -> None:
             )
             db.add(custom_runtime)
             db.flush()
+        inpformer_runtime = db.scalar(
+            select(RuntimeImage).where(RuntimeImage.name == "INP-Former Runtime (configure me)")
+        )
+        if inpformer_runtime is None:
+            inpformer_runtime = RuntimeImage(
+                name="INP-Former Runtime (configure me)",
+                image="train-platform/inpformer:configure-me",
+                digest="development",
+                framework="inpformer",
+                is_active=False,
+            )
+            db.add(inpformer_runtime)
+            db.flush()
 
         templates = {
             "yolo_detection": (
@@ -64,6 +77,22 @@ def ensure_development_catalog() -> None:
                 "运行代码版本中定义的入口命令。",
                 custom_runtime.id,
                 {"arguments": {"type": "string", "default": ""}},
+            ),
+            "inpformer_multiclass": (
+                "INP-Former 多类别异常检测",
+                "运行代码包中的 INP-Former 多类别入口脚本，使用 MVTec AD 数据集。",
+                inpformer_runtime.id,
+                {
+                    "runtime_framework": "inpformer",
+                    "dataset_format": "mvtec_ad",
+                    "epochs": {"type": "integer", "default": 50, "minimum": 1},
+                    "batch_size": {"type": "integer", "default": 16, "minimum": 1},
+                    "input_size": {"type": "integer", "default": 448, "minimum": 32},
+                    "crop_size": {"type": "integer", "default": 392, "minimum": 32},
+                    "inp_num": {"type": "integer", "default": 6, "minimum": 1},
+                    "encoder": {"type": "string", "default": "dinov2reg_vit_base_14"},
+                    "save_name": {"type": "string", "default": "inpformer"},
+                },
             ),
         }
         for key, (name, description, runtime_id, schema) in templates.items():

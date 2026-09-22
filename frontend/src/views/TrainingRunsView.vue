@@ -58,15 +58,27 @@ const form = reactive({
   imgsz: 640,
   model: 'yolo11n.pt',
   arguments: '',
+  input_size: 448,
+  crop_size: 392,
+  inp_num: 6,
+  encoder: 'dinov2reg_vit_base_14',
+  save_name: 'inpformer',
 })
 
 const selectedTemplate = computed(() => templates.value.find((item) => item.id === form.template_id))
+const requiredDatasetFormat = computed(() => selectedTemplate.value?.parameter_schema.dataset_format as string | undefined)
+const requiredRuntimeFramework = computed(() => selectedTemplate.value?.parameter_schema.runtime_framework as string | undefined)
 const datasetOptions = computed(() =>
   datasets.value.flatMap((dataset) =>
     dataset.versions
-      .filter((version) => version.status === 'ready')
+      .filter((version) => version.status === 'ready' && (!requiredDatasetFormat.value || version.format === requiredDatasetFormat.value))
       .map((version) => ({ label: `${dataset.name} v${version.version} · ${version.format}`, value: version.id })),
   ),
+)
+const runtimeOptions = computed(() =>
+  runtimes.value
+    .filter((item) => !requiredRuntimeFramework.value || item.framework === requiredRuntimeFramework.value)
+    .map((item) => ({ label: `${item.name} · ${item.framework}`, value: item.id })),
 )
 const codeOptions = computed(() =>
   codePackages.value.flatMap((item) =>
@@ -104,18 +116,36 @@ async function load() {
 }
 
 watch(selectedTemplate, (template) => {
-  if (template) form.runtime_image_id = template.default_runtime_image_id
+  if (!template) return
+  const compatibleRuntime = runtimes.value.find(
+    (item) => !template.parameter_schema.runtime_framework || item.framework === template.parameter_schema.runtime_framework,
+  )
+  form.runtime_image_id = compatibleRuntime?.id ?? ''
+  form.dataset_version_id = ''
 })
 
 async function createAndSubmit() {
-  if (!form.name.trim() || !form.template_id || !form.dataset_version_id || !form.code_version_id) {
-    message.warning('请完整选择训练模板、数据版本和代码版本')
+  if (!form.name.trim() || !form.template_id || !form.dataset_version_id || !form.code_version_id || !form.runtime_image_id) {
+    message.warning('请完整选择训练模板、数据版本、代码版本和运行镜像')
     return false
   }
   saving.value = true
-  const parameters = selectedTemplate.value?.key === 'yolo_detection'
-    ? { epochs: form.epochs, batch: form.batch, imgsz: form.imgsz, model: form.model }
-    : { arguments: form.arguments }
+  let parameters: Record<string, string | number>
+  if (selectedTemplate.value?.key === 'yolo_detection') {
+    parameters = { epochs: form.epochs, batch: form.batch, imgsz: form.imgsz, model: form.model }
+  } else if (selectedTemplate.value?.key === 'inpformer_multiclass') {
+    parameters = {
+      epochs: form.epochs,
+      batch_size: form.batch,
+      input_size: form.input_size,
+      crop_size: form.crop_size,
+      inp_num: form.inp_num,
+      encoder: form.encoder,
+      save_name: form.save_name,
+    }
+  } else {
+    parameters = { arguments: form.arguments }
+  }
   try {
     const run = (
       await api.post<TrainingRun>(`/projects/${projectId.value}/runs`, {
@@ -199,7 +229,7 @@ onMounted(load)
           <NFormItem label="训练模板"><NSelect v-model:value="form.template_id" :options="templates.map((item) => ({ label: item.name, value: item.id }))" /></NFormItem>
           <NFormItem label="数据集版本"><NSelect v-model:value="form.dataset_version_id" :options="datasetOptions" /></NFormItem>
           <NFormItem label="代码版本"><NSelect v-model:value="form.code_version_id" :options="codeOptions" /></NFormItem>
-          <NFormItem label="运行镜像"><NSelect v-model:value="form.runtime_image_id" :options="runtimes.map((item) => ({ label: `${item.name} · ${item.framework}`, value: item.id }))" /></NFormItem>
+          <NFormItem label="运行镜像"><NSelect v-model:value="form.runtime_image_id" :options="runtimeOptions" :placeholder="runtimeOptions.length ? '选择运行镜像' : '管理员尚未登记兼容镜像'" /></NFormItem>
           <NFormItem label="GPU 型号"><NSelect v-model:value="form.requested_gpu_model" :options="[{ label: '自动选择同型号卡', value: 'any' }, { label: 'RTX 3090', value: 'rtx_3090' }, { label: 'RTX 4090', value: 'rtx_4090' }, { label: 'Tesla T4', value: 'tesla_t4' }]" /></NFormItem>
           <NFormItem label="GPU 数量"><NSelect v-model:value="form.requested_gpu_count" :options="[{ label: 'CPU', value: 0 }, { label: '1 张', value: 1 }, { label: '2 张', value: 2 }]" /></NFormItem>
           <NFormItem label="优先级"><NInputNumber v-model:value="form.priority" :min="-10" :max="10" /></NFormItem>
@@ -209,6 +239,15 @@ onMounted(load)
           <NFormItem label="训练轮数"><NInputNumber v-model:value="form.epochs" :min="1" /></NFormItem>
           <NFormItem label="批量大小"><NInputNumber v-model:value="form.batch" :min="1" /></NFormItem>
           <NFormItem label="图像尺寸"><NInputNumber v-model:value="form.imgsz" :min="32" :step="32" /></NFormItem>
+        </div>
+        <div v-else-if="selectedTemplate?.key === 'inpformer_multiclass'" class="form-grid parameters-grid">
+          <NFormItem label="训练轮数"><NInputNumber v-model:value="form.epochs" :min="1" /></NFormItem>
+          <NFormItem label="批量大小"><NInputNumber v-model:value="form.batch" :min="1" /></NFormItem>
+          <NFormItem label="输入尺寸"><NInputNumber v-model:value="form.input_size" :min="32" /></NFormItem>
+          <NFormItem label="裁剪尺寸"><NInputNumber v-model:value="form.crop_size" :min="32" /></NFormItem>
+          <NFormItem label="INP 数量"><NInputNumber v-model:value="form.inp_num" :min="1" /></NFormItem>
+          <NFormItem label="编码器"><NSelect v-model:value="form.encoder" :options="[{ label: 'DINOv2 Reg ViT-B/14', value: 'dinov2reg_vit_base_14' }, { label: 'DINOv2 Reg ViT-S/14', value: 'dinov2reg_vit_small_14' }, { label: 'DINOv2 Reg ViT-L/14', value: 'dinov2reg_vit_large_14' }]" /></NFormItem>
+          <NFormItem label="结果名称"><NInput v-model:value="form.save_name" placeholder="inpformer" /></NFormItem>
         </div>
         <NFormItem v-else label="附加命令参数"><NInput v-model:value="form.arguments" placeholder="--epochs 100 --batch-size 16" /></NFormItem>
       </NForm>

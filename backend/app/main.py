@@ -17,6 +17,7 @@ OPENAPI_TAGS = [
     {"name": "系统状态", "description": "服务存活检查与运行状态。"},
     {"name": "认证", "description": "登录、当前用户和访问令牌。"},
     {"name": "用户管理", "description": "平台用户的查询和创建，仅管理员可操作。"},
+    {"name": "运行镜像管理", "description": "登记、修改和启停训练运行镜像，仅管理员可操作。"},
     {"name": "项目与成员", "description": "项目创建、项目查询和成员管理。"},
     {"name": "数据集与代码", "description": "数据集、代码包及其版本上传和清单查询。"},
     {"name": "训练任务", "description": "训练模板、GPU 资源、任务调度、日志和停止操作。"},
