@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
@@ -29,6 +30,20 @@ ACTIVE_STATUSES = {
     TrainingRunStatus.CANCEL_REQUESTED,
     TrainingRunStatus.STOPPING,
 }
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_storage_path(storage_root: Path, uri: str) -> Path:
+    """Resolve a persisted storage URI without allowing it to escape STORAGE_ROOT."""
+    if not uri.strip():
+        raise ValueError("Storage URI is empty")
+    raw_path = Path(uri)
+    candidate = raw_path if raw_path.is_absolute() else storage_root / raw_path
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(storage_root):
+        raise ValueError(f"Storage URI escapes the configured root: {uri}")
+    return resolved
 
 
 class TrainingScheduler:
@@ -165,12 +180,20 @@ class TrainingScheduler:
                     )
                     db.commit()
                 except Exception as exc:
+                    logger.exception("Failed to start training run %s", run.id)
                     db.rollback()
                     failed = db.get(TrainingRun, run.id)
                     if failed:
                         failed.status = TrainingRunStatus.FAILED
                         failed.failure_reason = str(exc)[:2000]
                         failed.finished_at = utc_now()
+                        db.add(
+                            RunEvent(
+                                run_id=failed.id,
+                                event_type="error",
+                                message=f"训练任务启动失败：{failed.failure_reason}",
+                            )
+                        )
                         db.commit()
 
     def _poll_active_runs(self) -> None:
@@ -276,6 +299,8 @@ class TrainingScheduler:
             )
 
         storage_root = Path(settings.storage_root).resolve()
+        code_root = _resolve_storage_path(storage_root, run.code_version.cache_uri)
+        dataset_root = _resolve_storage_path(storage_root, run.dataset_version.cache_uri)
         run_root = storage_root / "runs" / run.project_id / run.id
         output_root = run_root / "output"
         config_root = run_root / "config"
@@ -307,8 +332,8 @@ class TrainingScheduler:
             },
             gpu_uuids=[device.uuid for device in devices],
             mounts=[
-                MountSpec(run.code_version.cache_uri, "/workspace/code", read_only=True),
-                MountSpec(run.dataset_version.cache_uri, "/workspace/dataset", read_only=True),
+                MountSpec(str(code_root), "/workspace/code", read_only=True),
+                MountSpec(str(dataset_root), "/workspace/dataset", read_only=True),
                 MountSpec(str(output_root), "/workspace/output", read_only=False),
                 MountSpec(str(config_root), "/workspace/config", read_only=True),
             ],

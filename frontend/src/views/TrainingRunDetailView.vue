@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowLeft, BarChart3, CircleStop, Download, FileBox, PackagePlus, RefreshCw, Terminal } from 'lucide-vue-next'
-import { NButton, NDescriptions, NDescriptionsItem, NForm, NFormItem, NInput, NModal, NSelect, NSpin, NTag, useDialog, useMessage } from 'naive-ui'
+import { NAlert, NButton, NDescriptions, NDescriptionsItem, NForm, NFormItem, NInput, NModal, NSelect, NSpin, NTag, useDialog, useMessage } from 'naive-ui'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -136,6 +136,9 @@ onBeforeUnmount(() => {
           <div><h1>{{ run.name }}</h1><p>{{ run.template_name }} · {{ run.runtime_image_name }}</p></div>
           <div class="page-actions"><NTag :type="statusType(run.status)" size="large">{{ run.status }}</NTag><NButton quaternary circle title="刷新" @click="load"><RefreshCw :size="18" /></NButton><NButton v-if="canRegister" type="primary" @click="showRegister = true"><template #icon><PackagePlus /></template>注册模型</NButton><NButton v-if="canStop" type="error" secondary @click="stopRun"><template #icon><CircleStop /></template>停止</NButton></div>
         </header>
+        <NAlert v-if="run.status === 'failed'" type="error" title="训练启动或执行失败" style="margin-bottom: 20px">
+          {{ run.failure_reason || '训练容器异常退出，请查看下方实时日志。' }}
+        </NAlert>
         <NDescriptions bordered :column="2" label-placement="left" class="run-descriptions">
           <NDescriptionsItem label="数据版本">{{ run.dataset_label }}</NDescriptionsItem>
           <NDescriptionsItem label="代码版本">{{ run.code_label }}</NDescriptionsItem>
