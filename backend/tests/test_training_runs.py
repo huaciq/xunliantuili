@@ -93,6 +93,7 @@ def test_training_run_lifecycle_and_gpu_release() -> None:
         assert run["command"][:3] == ["yolo", "detect", "train"]
         assert "data=/workspace/dataset/wrapped-dataset/data.yaml" in run["command"]
         assert "model=/opt/models/yolo11n.pt" in run["command"]
+        assert "amp=False" in run["command"]
 
         submitted = client.post(f"/api/v1/runs/{run['id']}/submit", headers=headers)
         assert submitted.status_code == 200

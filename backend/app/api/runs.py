@@ -164,6 +164,9 @@ def _build_command(
             f"epochs={values['epochs']}",
             f"batch={values['batch']}",
             f"imgsz={values['imgsz']}",
+            # Ultralytics 8.4 performs an online yolo26n.pt download for its AMP
+            # self-check. Keep the built-in template deterministic and offline.
+            "amp=False",
             "project=/workspace/output",
             "name=train",
         ]

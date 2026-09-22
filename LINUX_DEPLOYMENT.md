@@ -45,6 +45,10 @@ Ultralytics 镜像会安装 OpenCV 所需的 `libxcb1`、`libgl1` 和相关最�
 `Ultralytics` 子目录；训练容器因此不需要联网下载 `Arial.ttf`，使用宿主机
 映射 UID 运行时也不会回退到不可写的 `/tmp/Ultralytics`。
 
+内置 YOLO 模板默认使用 `amp=False`。Ultralytics 8.4 在启用 AMP 时会额外下载
+`yolo26n.pt` 执行一次自检；关闭该选项可保证训练不依赖运行时网络。后续若在
+镜像中预装对应的 AMP 检查权重，可以再将其作为模板参数开放。
+
 镜像名称与平台初始化目录一致：
 
 ```text
