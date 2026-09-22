@@ -1,5 +1,7 @@
 # Linux GPU 执行层部署
 
+完整的从 Windows 开发到 Linux 长期运行手册见 [DEPLOYMENT_MANUAL.md](DEPLOYMENT_MANUAL.md)。本文保留 GPU 执行层的补充说明。
+
 ## 前置条件
 
 - Linux 服务器可正常执行 `nvidia-smi`。
@@ -67,9 +69,9 @@ AUTO_CREATE_TABLES=false
 
 ```bash
 cd backend
-uv sync --extra dev
+uv sync --frozen --python 3.11
 uv run alembic upgrade head
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
 启动时平台会通过 `nvidia-smi` 登记 GPU。Docker 任务使用 GPU UUID，不依赖可能变化的显示顺序。

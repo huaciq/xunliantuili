@@ -4,6 +4,8 @@
 
 详细设计见 [DESIGN.md](DESIGN.md)。
 
+完整的 Windows 开发、Linux 首次部署、日常发布、权限、安全和故障排查流程见 [DEPLOYMENT_MANUAL.md](DEPLOYMENT_MANUAL.md)。
+
 ## 目录
 
 ```text
@@ -36,7 +38,7 @@ Fake Executor 生成的 checkpoint 和 ONNX 是开发占位文件，界面与控
 
 ### 后端
 
-需要 Python 3.9+ 和 [uv](https://docs.astral.sh/uv/)。默认使用 SQLite，因此开发控制面不需要 Docker。
+需要 Python 3.11 和 [uv](https://docs.astral.sh/uv/)。默认使用 SQLite，因此开发控制面不需要 Docker。
 
 ```powershell
 Set-Location backend
