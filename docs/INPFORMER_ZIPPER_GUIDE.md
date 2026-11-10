@@ -40,10 +40,11 @@ docker run --rm --gpus all train-platform/inpformer:zipper-v1 python -c 'import 
 
 ## 3. 准备代码包（Windows PowerShell）
 
-下载 [官方 INP-Former 代码](https://github.com/luow23/INP-Former)。以下命令将代码、平台入口脚本和 [DINOv2 Reg ViT-B/14 官方预训练权重](https://github.com/facebookresearch/dinov2#pretrained-backbones-via-pytorch-hub) 打包。数据或模型不会上传到 Git。请使用一个新的准备目录：
+如果 Windows 的 `F:\zipper_pictures\platform_upload_v1` 中已有 `inpformer-zipper-code-v1.tar`，可直接跳到本节末尾上传。以下命令仅用于重建代码包，将 [官方 INP-Former 代码](https://github.com/luow23/INP-Former)、平台入口脚本和 [DINOv2 Reg ViT-B/14 官方预训练权重](https://github.com/facebookresearch/dinov2#pretrained-backbones-via-pytorch-hub) 打包。数据或模型不会上传到 Git。重建时用没有同名 `INP-Former` 目录的新工作目录：
 
 ```powershell
-Set-Location 'F:\zipper_pictures\platform_upload_v1'
+New-Item -ItemType Directory -Path 'F:\zipper_pictures\code_rebuild'
+Set-Location 'F:\zipper_pictures\code_rebuild'
 git clone https://github.com/luow23/INP-Former.git INP-Former
 git -C .\INP-Former checkout --detach 17d265381d9b323a2ef6e05aab0665a85edebe84
 git -C .\INP-Former rev-parse HEAD

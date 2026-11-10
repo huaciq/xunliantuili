@@ -93,7 +93,7 @@ def main():
         fuse_layer_encoder=groups,
         fuse_layer_decoder=groups,
         prototype_token=prototypes,
-    ).to(device)
+    )
     trainable = nn.ModuleList([bottleneck, aggregation, decoder, prototypes])
     for module in trainable.modules():
         if isinstance(module, nn.Linear):
@@ -104,6 +104,7 @@ def main():
             nn.init.ones_(module.weight)
             nn.init.zeros_(module.bias)
 
+    model.to(device)
     optimizer = StableAdamW(
         trainable.parameters(),
         lr=1e-3,
