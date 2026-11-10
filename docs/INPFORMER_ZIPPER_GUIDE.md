@@ -34,6 +34,16 @@ docker build -f infra/training/inpformer.Dockerfile -t train-platform/inpformer:
 docker run --rm --gpus all train-platform/inpformer:zipper-v1 python -c 'import torch, torchvision; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0))'
 ```
 
+若构建日志在 `pip install` 阶段显示 `Network is unreachable` 或 `Read timed out`，可只为这次构建换用服务器可访问的 HTTPS PyPI 源。例如：[清华 TUNA 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)：
+
+```bash
+docker build --progress=plain \
+  --build-arg PIP_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
+  -f infra/training/inpformer.Dockerfile -t train-platform/inpformer:zipper-v1 .
+```
+
+构建默认的 pip 网络超时为 60 秒，可用 `--build-arg PIP_TIMEOUT=90` 调整。用同一个 Docker 构建器重试时可复用 pip 缓存，无需清理缓存或加 `--no-cache`。若两个源都无法访问，检查 Docker 构建环境的外网或实验室代理配置。
+
 若已经构建了之前手册中的 INP-Former 镜像，可以复用，但需要通过上面的 GPU 检查和下一节的实际代码/权重加载检查，镜像名替换为真实 tag。不要选 YOLO 镜像或 `configure-me` 占位镜像。
 
 打开平台网页，以**平台管理员**进入「运行镜像」→「登记运行镜像」。名称填 `INP-Former Zipper v1`，Docker 镜像引用填 `train-platform/inpformer:zipper-v1`，框架标识填 `inpformer`，打开「允许创建任务」。版本标识可填 `zipper-v1`。不需要重启 API 或 Nginx。
