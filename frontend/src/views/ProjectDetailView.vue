@@ -4,6 +4,7 @@ import { NButton, NForm, NFormItem, NInput, NModal, NSelect, NSpin, NTag, useMes
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api, { errorMessage } from '../api'
+import ModelConversionPanel from '../components/ModelConversionPanel.vue'
 import type { CodePackage, Dataset, Project, ProjectRole, RegisteredModel, TrainingRun } from '../types'
 
 const route = useRoute()
@@ -75,6 +76,7 @@ onMounted(load)
           <button type="button" @click="router.push(`/projects/${project.id}/models`)"><Package :size="20" /><strong>{{ modelCount }}</strong><span>注册模型</span></button>
           <div><Users :size="20" /><strong>{{ project.members.length }}</strong><span>成员</span></div>
         </div>
+        <ModelConversionPanel v-if="project.nb_conversion" :key="project.id" :project="project" />
         <section class="content-section">
           <header class="section-header"><div><h2>项目成员</h2><p>成员权限应用于本项目中的全部资源。</p></div><NButton v-if="canManage" @click="showMember = true"><template #icon><Plus /></template>添加成员</NButton></header>
           <div class="data-table">

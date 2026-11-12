@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -78,6 +78,7 @@ class ProjectView(BaseModel):
         description="当前用户在该项目中的角色；管理员可能没有项目成员关系",
     )
     members: list[ProjectMemberView] = Field(default_factory=list, description="项目成员列表")
+    nb_conversion: Optional[Literal["ready", "unconfigured"]] = None
 
 
 class ProjectMemberAdd(BaseModel):

@@ -330,6 +330,23 @@ curl --noproxy '*' -fsS http://127.0.0.1/api/v1/health
 
 前端是带 hash 的静态资源，通常不需要重启 Nginx；浏览器用 Ctrl+F5 刷新即可。Nginx 配置变更时再执行 `nginx -t && systemctl reload nginx`。
 
+### 5.4 振动盘项目模型转换
+
+在振动盘项目详情的「模型转换」中选择包含全部权重的 `.onnx` 文件。转换成功后，当前页面提供「下载 NB」按钮，下载文件沿用原模型名和 `.nb` 后缀。项目负责人、研究员和系统管理员可以转换。每个 API 进程同时运行一次转换。
+
+转换器镜像需使用目标设备对应版本的 SDK 制作并安装到 Linux 服务器的 Docker。镜像入口接收两个位置参数 `/input/model.onnx` 和 `/output/model.nb`。转换成功时将 NB 文件写入第二个参数指定的路径并以状态码 `0` 退出。转换容器没有网络访问，输入只读，使用 `DOCKER_USER` 指定的非 root UID/GID，该用户需与 API 服务的存储目录所有者一致。
+
+镜像准备后，在项目根目录的 `.env` 设置以下变量，再重启 `train-platform-api`：
+
+| 变量 | 配置 |
+| --- | --- |
+| `NB_CONVERTER_IMAGE` | 本机 Docker 中已安装的转换器镜像引用。留空时项目页面显示未配置。 |
+| `NB_CONVERSION_PROJECTS` | 用逗号分隔的项目名或 ID。默认匹配 `振动盘`、`振动盘项目` 和 `ZDP 点位定位`。 |
+| `NB_CONVERSION_MAX_BYTES` | ONNX 和 NB 文件的大小上限，默认 256 MiB。 |
+| `NB_CONVERSION_TIMEOUT_SECONDS` | 单次转换超时，默认 600 秒。 |
+
+部署验收时，选择训练产物中的真实 ONNX，在网页转换并下载 NB，然后用振动盘设备上的推理软件加载该文件，确认输入输出符合设备要求。
+
 ## 6. SSH、重启和服务状态
 
 关闭 SSH 不会停止服务：
