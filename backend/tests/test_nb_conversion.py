@@ -1,4 +1,6 @@
+import json
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,10 +8,32 @@ from test_auth_projects import auth_header
 from test_resources import _zip_bytes
 
 from app.config import GLH_CONVERTER_COMMAND, settings
+from app.database import SessionLocal
 from app.main import app
+from app.models import TrainingRun, TrainingRunStatus
+from app.services.results import collect_container_results
 
 # Avoid the Windows virtual environment launcher in the timeout test.
 PYTHON = sys._base_executable
+FLAT_DATASET = _zip_bytes({
+    "images/001.jpg": "train-image",
+    "images/002.png": "validation-image",
+    "images/003.jpg": "unused-image",
+})
+
+
+def _upload_dataset(client, headers, project_path, archive):
+    dataset = client.post(f"{project_path}/datasets", headers=headers, json={"name": "Point"})
+    assert dataset.status_code == 201
+    dataset_id = dataset.json()["id"]
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/versions/upload",
+        headers=headers, files={"file": ("point.zip", archive)},
+    )
+    assert response.status_code == 200, response.text
+    version = response.json()["versions"][0]
+    assert version["status"] == "ready"
+    return version["id"]
 
 
 @pytest.fixture
@@ -32,22 +56,12 @@ def conversion_project(tmp_path_factory, monkeypatch):
         assert response.status_code == 201
         assert response.json()["nb_conversion"] == "ready"
         project_path = f"/api/v1/projects/{response.json()['id']}"
-        dataset = client.post(f"{project_path}/datasets", headers=headers, json={"name": "Point"})
-        assert dataset.status_code == 201
-        dataset_id = dataset.json()["id"]
         archive = _zip_bytes({
             "dataset200_point/train/images/001.jpg": "train-image",
             "dataset200_point/val/images/002.png": "validation-image",
             "dataset200_point/train/labels/001.txt": "0 0.5 0.5",
         })
-        response = client.post(
-            f"/api/v1/datasets/{dataset_id}/versions/upload",
-            headers=headers, files={"file": ("point.zip", archive)},
-        )
-        assert response.status_code == 200, response.text
-        version = response.json()["versions"][0]
-        assert version["status"] == "ready"
-        form = {"dataset_version_id": version["id"]}
+        form = {"dataset_version_id": _upload_dataset(client, headers, project_path, archive)}
         yield client, headers, f"{project_path}/conversions/onnx-to-nb", form
     assert not list((workdir / "converter" / "tasks").glob("platform-*"))
 
@@ -87,6 +101,94 @@ output.write_bytes(b"nb-output")
     assert response.headers["content-disposition"] == (
         "attachment; filename*=utf-8''%E7%82%B9%E4%BD%8D.nb"
     )
+
+
+def test_reuses_actual_split_for_downloaded_onnx(conversion_project, monkeypatch):
+    client, headers, path, _ = conversion_project
+    project = client.post("/api/v1/projects", headers=headers, json={"name": "点位训练"}).json()
+    project_path = f"/api/v1/projects/{project['id']}"
+    dataset_version_id = _upload_dataset(client, headers, project_path, FLAT_DATASET)
+    code = client.post(f"{project_path}/code-packages", headers=headers, json={"name": "Trainer"})
+    assert code.status_code == 201
+    code_id = code.json()["id"]
+    uploaded = client.post(
+        f"/api/v1/code-packages/{code_id}/versions/upload", headers=headers,
+        data={"default_entrypoint": "python train.py"},
+        files={"file": ("code.zip", _zip_bytes({"train.py": "pass"}))},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    templates = client.get("/api/v1/training-templates", headers=headers).json()
+    template = next(item for item in templates if item["key"] == "custom_command")
+    created = client.post(
+        f"{project_path}/runs", headers=headers,
+        json={
+            "name": "Point run", "template_id": template["id"],
+            "dataset_version_id": dataset_version_id,
+            "code_version_id": uploaded.json()["versions"][0]["id"],
+            "parameters": {"command": ["python", "train.py"]},
+        },
+    )
+    assert created.status_code == 201, created.text
+    run_id = created.json()["id"]
+    output_dir = Path(settings.storage_root) / "runs" / project["id"] / run_id / "output"
+    output_dir.mkdir(parents=True)
+    model = b"onnx-from-training"
+    (output_dir / "point.onnx").write_bytes(model)
+    (output_dir / "training_split.json").write_text(
+        json.dumps({
+            "train": ["/workspace/dataset/images/001.jpg"],
+            "val": ["/workspace/dataset/images/002.png"],
+        }),
+        encoding="utf-8",
+    )
+    with SessionLocal() as db:
+        run = db.get(TrainingRun, run_id)
+        run.status = TrainingRunStatus.SUCCEEDED
+        collect_container_results(db, run)
+        db.commit()
+
+    script = """\
+import json
+import sys
+from pathlib import Path
+
+source, dataset, output = map(Path, sys.argv[1:])
+split = json.loads(source.with_name("training_split.json").read_text(encoding="utf-8"))
+assert source.read_bytes() == b"onnx-from-training"
+assert [Path(p).read_bytes() for p in split["train"]] == [b"train-image"]
+assert [Path(p).read_bytes() for p in split["val"]] == [b"validation-image"]
+assert len(list(dataset.rglob("*.jpg"))) == 1
+output.write_bytes(b"nb-output")
+"""
+    monkeypatch.setattr(
+        settings, "nb_converter_command",
+        [PYTHON, "-c", script, "{input}", "{dataset}", "{output}"],
+    )
+    response = client.post(
+        path, headers=headers, files={"file": ("downloaded.onnx", model)}
+    )
+    assert response.status_code == 200, response.text
+    assert response.content == b"nb-output"
+    assert response.headers["content-disposition"] == 'attachment; filename="downloaded.nb"'
+
+    user_credentials = {"email": "calibrator@example.com", "password": "Calibrate123!"}
+    user = client.post(
+        "/api/v1/users", headers=headers, json={**user_credentials, "name": "Calibrator"},
+    )
+    assert user.status_code == 201
+    target_project_path = path.removesuffix("/conversions/onnx-to-nb")
+    member = client.post(
+        f"{target_project_path}/members", headers=headers,
+        json={"email": user_credentials["email"], "role": "researcher"},
+    )
+    assert member.status_code == 200
+    login = client.post("/api/v1/auth/login", json=user_credentials)
+    user_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    response = client.post(
+        path, headers=user_headers, files={"file": ("downloaded.onnx", model)}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("找不到这份 ONNX 对应的训练划分")
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,7 @@ import os
 import signal
 import subprocess
 from contextlib import suppress
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from shutil import copyfile
 from typing import Literal
 
@@ -18,6 +18,7 @@ from app.models import Project
 logger = logging.getLogger(__name__)
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
 PARTITIONS = ("train", "val")
+DATASET_MOUNT = PurePosixPath("/workspace/dataset")
 
 
 def nb_conversion_status(project: Project) -> Literal["ready", "unconfigured"] | None:
@@ -41,13 +42,12 @@ def conversion_task_root() -> Path:
     return tasks.resolve()
 
 
-def stage_calibration_dataset(source: Path, workspace: Path) -> Path:
+def _images_from_layout(source: Path) -> dict[str, list[Path]]:
     point_root = source / "dataset200_point"
     if point_root.is_dir() and not point_root.is_symlink():
         source = point_root
 
-    dataset = workspace / "dataset"
-    split: dict[str, list[str]] = {}
+    split = {}
     for partition in PARTITIONS:
         image_dir = source / partition / "images"
         images = []
@@ -64,11 +64,68 @@ def stage_calibration_dataset(source: Path, workspace: Path) -> Path:
                 status_code=422,
                 detail=f"校准数据集的 {partition}/images 中没有可用图片",
             )
+        split[partition] = images
+    return split
+
+
+def _images_from_training_split(source: Path, split_file: Path) -> dict[str, list[Path]]:
+    try:
+        with split_file.open("rb") as handle:
+            data = handle.read(settings.nb_conversion_max_bytes + 1)
+        if len(data) > settings.nb_conversion_max_bytes:
+            raise ValueError("Training split is too large")
+        entries = json.loads(data)
+        if not isinstance(entries, dict):
+            raise ValueError("Expected a split object")
+
+        split = {}
+        seen = set()
+        for partition in PARTITIONS:
+            filenames = entries.get(partition)
+            if not isinstance(filenames, list) or not filenames:
+                raise ValueError(f"Missing training split partition: {partition}")
+            images = []
+            for filename in filenames:
+                if not isinstance(filename, str):
+                    raise ValueError("Expected an image path")
+                relative = PurePosixPath(filename).relative_to(DATASET_MOUNT)
+                if ".." in relative.parts:
+                    raise ValueError("Training split contains a parent directory")
+                image = source.joinpath(*relative.parts).resolve()
+                if (
+                    not image.is_relative_to(source)
+                    or not image.is_file()
+                    or image.suffix.lower() not in IMAGE_SUFFIXES
+                    or image in seen
+                ):
+                    raise ValueError(f"Invalid or duplicate {partition} image")
+                seen.add(image)
+                images.append(image)
+            split[partition] = images
+        return split
+    except (OSError, ValueError) as exc:
+        logger.warning("Cannot use training split %s: %s", split_file, exc)
+        raise HTTPException(status_code=422, detail="训练划分与所选数据集的图片不匹配") from exc
+
+
+def stage_calibration_dataset(
+    source: Path, workspace: Path, training_split: Path | None = None
+) -> Path:
+    if training_split is None:
+        images_by_partition = _images_from_layout(source)
+    else:
+        images_by_partition = _images_from_training_split(source, training_split)
+
+    dataset = workspace / "dataset"
+    split: dict[str, list[str]] = {}
+    for partition, images in images_by_partition.items():
         target = dataset / partition / "images"
         target.mkdir(parents=True)
         split[partition] = []
         for image in images:
-            staged = target / image.name
+            relative = image.relative_to(source) if training_split else Path(image.name)
+            staged = target / relative
+            staged.parent.mkdir(parents=True, exist_ok=True)
             copyfile(image, staged)
             split[partition].append(str(staged))
 

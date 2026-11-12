@@ -11,13 +11,17 @@ import type { Dataset, Project } from '../types'
 const props = defineProps<{ project: Project; datasets: Dataset[] }>()
 const auth = useAuthStore()
 const canConvert = computed(() => auth.isAdmin || props.project.current_user_role !== 'viewer')
-const datasetOptions = computed(() => props.datasets.flatMap((dataset) =>
-  dataset.versions.filter((version) => version.status === 'ready').map((version) => ({
-    label: `${dataset.name} v${version.version}`,
-    value: version.id,
-  })),
-))
-const datasetVersionId = ref<string | null>(null)
+const originalTrainingDataset = 'original-training-dataset'
+const datasetOptions = computed(() => [
+  { label: '自动使用原训练数据集', value: originalTrainingDataset },
+  ...props.datasets.flatMap((dataset) =>
+    dataset.versions.filter((version) => version.status === 'ready').map((version) => ({
+      label: `${dataset.name} v${version.version}`,
+      value: version.id,
+    })),
+  ),
+])
+const datasetVersionId = ref<string | null>(originalTrainingDataset)
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = shallowRef<File | null>(null)
 const result = shallowRef<{ file: Blob; name: string } | null>(null)
@@ -26,8 +30,8 @@ const failure = ref('')
 
 watch(datasetOptions, (options) => {
   if (options.some((option) => option.value === datasetVersionId.value)) return
-  datasetVersionId.value = options.length === 1 ? options[0]!.value : null
-}, { immediate: true })
+  datasetVersionId.value = originalTrainingDataset
+})
 
 watch(datasetVersionId, () => {
   result.value = null
@@ -71,7 +75,9 @@ async function convert() {
   result.value = null
   const data = new FormData()
   data.append('file', file)
-  data.append('dataset_version_id', datasetVersionId.value)
+  if (datasetVersionId.value !== originalTrainingDataset) {
+    data.append('dataset_version_id', datasetVersionId.value)
+  }
   try {
     const response = await api.post<Blob>(
       `/projects/${props.project.id}/conversions/onnx-to-nb`, data,
@@ -105,9 +111,6 @@ function download() {
     <NAlert v-if="!canConvert" type="info">当前账号没有模型转换权限。</NAlert>
     <NAlert v-else-if="project.nb_conversion === 'unconfigured'" type="warning">
       服务器尚未配置 NB 转换器。
-    </NAlert>
-    <NAlert v-else-if="!datasetOptions.length" type="info">
-      请先在项目数据集中上传模型对应的点位数据集，供 INT8 校准使用。
     </NAlert>
     <template v-else>
       <NFormItem label="校准数据集版本" class="calibration-field">
