@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.deps import CurrentUser, DbSession, get_project_role
 from app.models import AuditLog, Project, ProjectMember, ProjectRole, SystemRole, User
 from app.schemas import ProjectCreate, ProjectMemberAdd, ProjectMemberView, ProjectView
+from app.services.nb_conversion import nb_conversion_status
 
 router = APIRouter(prefix="/projects", tags=["项目与成员"])
 
@@ -21,6 +22,7 @@ def to_project_view(project: Project, current_user: User) -> ProjectView:
         created_at=project.created_at,
         updated_at=project.updated_at,
         current_user_role=(current_membership.role if current_membership else None),
+        nb_conversion=nb_conversion_status(project),
         members=[
             ProjectMemberView(
                 id=member.id,

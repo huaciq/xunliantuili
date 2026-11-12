@@ -22,6 +22,7 @@ OPENAPI_TAGS = [
     {"name": "数据集与代码", "description": "数据集、代码包及其版本上传和清单查询。"},
     {"name": "训练任务", "description": "训练模板、GPU 资源、任务调度、日志和停止操作。"},
     {"name": "实验与模型", "description": "指标、训练产物、模型注册、导出和一致性检查。"},
+    {"name": "模型转换", "description": "将项目的 ONNX 文件转换为设备使用的 NB 文件。"},
 ]
 
 

@@ -26,6 +26,7 @@ export interface Project {
   updated_at: string
   current_user_role: ProjectRole | null
   members: ProjectMember[]
+  nb_conversion: 'ready' | 'unconfigured' | null
 }
 
 export type ResourceVersionStatus = 'processing' | 'ready' | 'failed'
