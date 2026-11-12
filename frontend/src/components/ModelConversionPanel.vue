@@ -1,21 +1,38 @@
 <script setup lang="ts">
 import { isAxiosError } from 'axios'
 import { Download, FileOutput, Upload } from 'lucide-vue-next'
-import { NAlert, NButton } from 'naive-ui'
-import { computed, ref, shallowRef } from 'vue'
+import { NAlert, NButton, NFormItem, NSelect } from 'naive-ui'
+import { computed, ref, shallowRef, watch } from 'vue'
 
 import api, { errorMessage } from '../api'
 import { useAuthStore } from '../stores/auth'
-import type { Project } from '../types'
+import type { Dataset, Project } from '../types'
 
-const props = defineProps<{ project: Project }>()
+const props = defineProps<{ project: Project; datasets: Dataset[] }>()
 const auth = useAuthStore()
 const canConvert = computed(() => auth.isAdmin || props.project.current_user_role !== 'viewer')
+const datasetOptions = computed(() => props.datasets.flatMap((dataset) =>
+  dataset.versions.filter((version) => version.status === 'ready').map((version) => ({
+    label: `${dataset.name} v${version.version}`,
+    value: version.id,
+  })),
+))
+const datasetVersionId = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = shallowRef<File | null>(null)
 const result = shallowRef<{ file: Blob; name: string } | null>(null)
 const converting = ref(false)
 const failure = ref('')
+
+watch(datasetOptions, (options) => {
+  if (options.some((option) => option.value === datasetVersionId.value)) return
+  datasetVersionId.value = options.length === 1 ? options[0]!.value : null
+}, { immediate: true })
+
+watch(datasetVersionId, () => {
+  result.value = null
+  failure.value = ''
+})
 
 function selectFile(event: Event) {
   const input = event.target as HTMLInputElement
@@ -48,12 +65,13 @@ async function conversionError(error: unknown) {
 
 async function convert() {
   const file = selectedFile.value
-  if (!file || converting.value) return
+  if (!file || !datasetVersionId.value || converting.value) return
   converting.value = true
   failure.value = ''
   result.value = null
   const data = new FormData()
   data.append('file', file)
+  data.append('dataset_version_id', datasetVersionId.value)
   try {
     const response = await api.post<Blob>(
       `/projects/${props.project.id}/conversions/onnx-to-nb`, data,
@@ -88,13 +106,25 @@ function download() {
     <NAlert v-else-if="project.nb_conversion === 'unconfigured'" type="warning">
       服务器尚未配置 NB 转换器。
     </NAlert>
+    <NAlert v-else-if="!datasetOptions.length" type="info">
+      请先在项目数据集中上传模型对应的点位数据集，供 INT8 校准使用。
+    </NAlert>
     <template v-else>
+      <NFormItem label="校准数据集版本" class="calibration-field">
+        <NSelect
+          v-model:value="datasetVersionId" :options="datasetOptions" :disabled="converting"
+          placeholder="选择模型对应的数据集版本"
+        />
+      </NFormItem>
       <div class="conversion-actions">
         <input ref="fileInput" type="file" accept=".onnx" hidden @change="selectFile" />
         <NButton :disabled="converting" @click="fileInput?.click()">
           <template #icon><Upload /></template>选择 ONNX 文件
         </NButton>
-        <NButton type="primary" :disabled="!selectedFile" :loading="converting" @click="convert">
+        <NButton
+          type="primary" :disabled="!selectedFile || !datasetVersionId"
+          :loading="converting" @click="convert"
+        >
           <template #icon><FileOutput /></template>{{ converting ? '转换中' : '开始转换' }}
         </NButton>
         <span v-if="selectedFile" class="conversion-filename">{{ selectedFile.name }}</span>
@@ -111,6 +141,7 @@ function download() {
 </template>
 
 <style scoped>
+.calibration-field { max-width: 440px; }
 .conversion-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .conversion-filename { color: var(--muted); overflow-wrap: anywhere; }
 .conversion-feedback { margin-top: 12px; }

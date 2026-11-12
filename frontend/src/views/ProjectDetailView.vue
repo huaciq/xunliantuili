@@ -14,7 +14,7 @@ const project = ref<Project | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 const showMember = ref(false)
-const datasetCount = ref(0)
+const datasets = ref<Dataset[]>([])
 const codePackageCount = ref(0)
 const runCount = ref(0)
 const modelCount = ref(0)
@@ -37,7 +37,7 @@ async function load() {
       api.get<RegisteredModel[]>(`/projects/${route.params.id}/models`),
     ])
     project.value = projectResponse.data
-    datasetCount.value = datasetsResponse.data.length
+    datasets.value = datasetsResponse.data
     codePackageCount.value = codeResponse.data.length
     runCount.value = runsResponse.data.length
     modelCount.value = modelsResponse.data.length
@@ -70,13 +70,15 @@ onMounted(load)
           <NTag :bordered="false">{{ project.current_user_role ?? '系统管理员' }}</NTag>
         </header>
         <div class="summary-strip">
-          <button type="button" @click="router.push(`/projects/${project.id}/datasets`)"><Database :size="20" /><strong>{{ datasetCount }}</strong><span>数据集</span></button>
+          <button type="button" @click="router.push(`/projects/${project.id}/datasets`)"><Database :size="20" /><strong>{{ datasets.length }}</strong><span>数据集</span></button>
           <button type="button" @click="router.push(`/projects/${project.id}/code`)"><FileArchive :size="20" /><strong>{{ codePackageCount }}</strong><span>代码包</span></button>
           <button type="button" @click="router.push(`/projects/${project.id}/runs`)"><Cpu :size="20" /><strong>{{ runCount }}</strong><span>训练任务</span></button>
           <button type="button" @click="router.push(`/projects/${project.id}/models`)"><Package :size="20" /><strong>{{ modelCount }}</strong><span>注册模型</span></button>
           <div><Users :size="20" /><strong>{{ project.members.length }}</strong><span>成员</span></div>
         </div>
-        <ModelConversionPanel v-if="project.nb_conversion" :key="project.id" :project="project" />
+        <ModelConversionPanel
+          v-if="project.nb_conversion" :key="project.id" :project="project" :datasets="datasets"
+        />
         <section class="content-section">
           <header class="section-header"><div><h2>项目成员</h2><p>成员权限应用于本项目中的全部资源。</p></div><NButton v-if="canManage" @click="showMember = true"><template #icon><Plus /></template>添加成员</NButton></header>
           <div class="data-table">

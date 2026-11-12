@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+GLH_CONVERTER_COMMAND = ("/bin/bash", "./convert.sh", "{input}", "{dataset}", "{output}")
+
 
 class Settings(BaseSettings):
     app_name: str = "Vision Training Platform"
@@ -33,7 +35,7 @@ class Settings(BaseSettings):
     docker_pids_limit: int = 1024
     nb_conversion_projects: str = "振动盘,振动盘项目,ZDP 点位定位"
     nb_converter_workdir: str = "/opt/glh-converter"
-    nb_converter_command: list[str] = Field(default_factory=list)
+    nb_converter_command: list[str] = Field(default_factory=lambda: list(GLH_CONVERTER_COMMAND))
     nb_conversion_max_bytes: int = Field(default=256 * 1024 * 1024, gt=0)
     nb_conversion_timeout_seconds: int = Field(default=600, gt=0)
     nvidia_smi_binary: str = "nvidia-smi"

@@ -332,23 +332,36 @@ curl --noproxy '*' -fsS http://127.0.0.1/api/v1/health
 
 ### 5.4 振动盘项目模型转换
 
-在振动盘项目详情的「模型转换」中选择包含全部权重的 `.onnx` 文件。转换成功后，当前页面提供「下载 NB」按钮，下载文件沿用原模型名和 `.nb` 后缀。项目负责人、研究员和系统管理员可以转换。每个 API 进程同时运行一次转换。
+在振动盘项目详情的「模型转换」中选择包含全部权重的点位 `.onnx` 文件和对应的数据集版本。点位模型输入为 `[1,3,128,128]`，输出为 `[1,11]`。数据集使用 `train/images` 和 `val/images`，可放在 `dataset200_point` 目录下。平台在独立任务目录生成 `training_split.json`，保留训练与验证的划分，SDK 使用训练图片做 INT8 校准。转换成功后点击「下载 NB」，下载文件沿用原模型名。项目负责人、研究员和系统管理员可以转换。
 
 服务器在 `/opt/glh-converter` 中已有宿主机转换脚本、`converter/.venv` 和 `ubuntu-npu:v2.0.10.2` 镜像。平台在配置的目录中以 API 服务账号 `huaciq` 调用宿主机脚本，脚本使用现有虚拟环境完成预处理和校准，再调用 Docker 中的 SDK。该账号需能执行脚本、读取校准资源并访问 Docker。
 
-在项目根目录的 `.env` 中填写已验证的命令，再重启 `train-platform-api`：
+平台默认使用以下配置。部署包位于 `/opt/glh-converter` 时可以直接使用，项目根目录的 `.env` 可覆盖这些值：
+
+```dotenv
+NB_CONVERTER_WORKDIR=/opt/glh-converter
+NB_CONVERTER_COMMAND='["/bin/bash","./convert.sh","{input}","{dataset}","{output}"]'
+```
 
 | 变量 | 配置 |
 | --- | --- |
 | `NB_CONVERTER_WORKDIR` | 样例转换命令的执行目录，默认为 `/opt/glh-converter`。 |
-| `NB_CONVERTER_COMMAND` | JSON 参数数组，首项是可执行文件，后续各项是命令参数。`[]` 表示尚未配置。 |
+| `NB_CONVERTER_COMMAND` | JSON 参数数组。平台分别替换 `{input}`、`{dataset}` 和 `{output}`，对应 ONNX 文件、数据集目录和 NB 输出路径。`[]` 表示尚未配置。 |
 | `NB_CONVERSION_PROJECTS` | 用逗号分隔的项目名或 ID。默认匹配 `振动盘`、`振动盘项目` 和 `ZDP 点位定位`。 |
 | `NB_CONVERSION_MAX_BYTES` | ONNX 和 NB 文件的大小上限，默认 256 MiB。 |
 | `NB_CONVERSION_TIMEOUT_SECONDS` | 单次转换超时，默认 600 秒。 |
 
-把样例命令的 ONNX 路径换成 `{input}`、目标 NB 路径换成 `{output}`，输出目录参数可用 `{output_dir}`。若脚本使用目录参数，需把实际生成的文件复制到 `{output}` 指定的 `model.nb`，成功时返回状态码 `0`。命令用逐项参数执行。需要进入虚拟环境或整理产物时，可以把相关步骤放进启动脚本，并把两个路径作为参数传给它。
+平台将任务放在 `/opt/glh-converter/converter/tasks/` 下，输出为任务内的 `output/result.nb`。API 服务账号需能在 `converter/tasks` 和 `converter/sdk-workspace` 中创建目录。若安装时这两个目录由 root 创建，按服务账号配置目录权限后重启 API：
 
-部署验收时，使用已经跑通的样例 ONNX，在网页转换并下载 NB，检查下载文件能正常加载。转换失败时通过 `journalctl -u train-platform-api` 查看宿主机脚本退出码和日志末尾。
+```bash
+sudo install -d -o huaciq -g huaciq -m 0750 \
+  /opt/glh-converter/converter/tasks /opt/glh-converter/converter/sdk-workspace
+sudo -u huaciq test -x /opt/glh-converter/converter/.venv/bin/python
+sudo -u huaciq docker image inspect ubuntu-npu:v2.0.10.2 >/dev/null
+sudo systemctl restart train-platform-api
+```
+
+部署验收时，使用已跑通的样例 ONNX 和对应校准数据，从网页转换并下载 NB，检查下载文件能正常加载。转换失败时通过 `journalctl -u train-platform-api` 查看宿主机脚本退出码和日志末尾。
 
 ## 6. SSH、重启和服务状态
 
