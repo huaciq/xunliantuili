@@ -1,5 +1,4 @@
-import subprocess
-from pathlib import Path
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,14 +6,18 @@ from test_auth_projects import auth_header
 
 from app.config import settings
 from app.main import app
-from app.services import nb_conversion
 
 
 @pytest.fixture
 def conversion_project(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "storage_root", str(tmp_path))
+    storage = tmp_path / "storage"
+    workdir = tmp_path / "glh converter"
+    workdir.mkdir()
+    (workdir / "sdk-marker").write_text("ready", encoding="utf-8")
+    monkeypatch.setattr(settings, "storage_root", str(storage))
     monkeypatch.setattr(settings, "nb_conversion_projects", "振动盘转换验收")
-    monkeypatch.setattr(settings, "nb_converter_image", "test/nb-converter:local")
+    monkeypatch.setattr(settings, "nb_converter_workdir", str(workdir))
+    monkeypatch.setattr(settings, "nb_converter_command", [sys.executable, "-c", "pass"])
     monkeypatch.setattr(settings, "nb_conversion_max_bytes", 128)
     with TestClient(app) as client:
         headers = auth_header(client)
@@ -25,22 +28,24 @@ def conversion_project(tmp_path, monkeypatch):
         assert response.json()["nb_conversion"] == "ready"
         path = f"/api/v1/projects/{response.json()['id']}/conversions/onnx-to-nb"
         yield client, headers, path
-    assert list(tmp_path.iterdir()) == []
+    assert not storage.exists() or list(storage.iterdir()) == []
 
 
 def test_download_contains_converter_output(conversion_project, monkeypatch):
-    def run(argv, **kwargs):
-        assert "--network=none" in argv
-        assert argv[-3:] == [settings.nb_converter_image, "/input/model.onnx", "/output/model.nb"]
-        mounts = [arg.split(",")[1:] for arg in argv if arg.startswith("type=bind,")]
-        assert mounts[0][1:] == ["target=/input/model.onnx", "readonly"]
-        source = Path(mounts[0][0].removeprefix("source="))
-        assert source.read_bytes() == b"onnx-input"
-        output = Path(mounts[1][0].removeprefix("source=")) / "model.nb"
-        output.write_bytes(b"nb-output")
-        return subprocess.CompletedProcess(argv, 0)
+    script = """\
+from pathlib import Path
+import os
+import sys
 
-    monkeypatch.setattr(nb_conversion.subprocess, "run", run)
+source, output = map(Path, sys.argv[1:])
+assert source.read_bytes() == b"onnx-input"
+assert Path("sdk-marker").read_text(encoding="utf-8") == "ready"
+assert Path(os.environ["TMPDIR"]) == source.parent
+output.write_bytes(b"nb-output")
+"""
+    monkeypatch.setattr(
+        settings, "nb_converter_command", [sys.executable, "-c", script, "{input}", "{output}"]
+    )
     client, headers, path = conversion_project
     response = client.post(path, headers=headers, files={"file": ("点位.ONNX", b"onnx-input")})
 
@@ -65,34 +70,26 @@ def test_rejects_invalid_upload(conversion_project, filename, data, status):
 def test_needs_configured_converter_and_eligible_project(conversion_project, monkeypatch):
     client, headers, path = conversion_project
     files = {"file": ("model.onnx", b"onnx-input")}
-    monkeypatch.setattr(settings, "nb_converter_image", "")
+    monkeypatch.setattr(settings, "nb_converter_command", [])
     assert client.post(path, headers=headers, files=files).status_code == 503
     monkeypatch.setattr(settings, "nb_conversion_projects", "another-project")
     assert client.post(path, headers=headers, files=files).status_code == 404
 
 
-def test_conversion_without_output_is_rejected(conversion_project, monkeypatch):
-    def run(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(nb_conversion.subprocess, "run", run)
+def test_conversion_without_output_is_rejected(conversion_project):
     client, headers, path = conversion_project
     response = client.post(path, headers=headers, files={"file": ("model.onnx", b"onnx-input")})
     assert response.status_code == 422
     assert response.headers.get("content-disposition") is None
 
 
-def test_timed_out_conversion_removes_container(conversion_project, monkeypatch):
-    calls = []
-
-    def run(argv, **kwargs):
-        calls.append(argv)
-        if argv[1] == "run":
-            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-        return subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(nb_conversion.subprocess, "run", run)
+def test_timed_out_conversion_cleans_up_and_can_retry(conversion_project, monkeypatch):
+    monkeypatch.setattr(settings, "nb_conversion_timeout_seconds", 1)
+    monkeypatch.setattr(
+        settings, "nb_converter_command", [sys.executable, "-c", "import time; time.sleep(30)"]
+    )
     client, headers, path = conversion_project
-    response = client.post(path, headers=headers, files={"file": ("model.onnx", b"onnx-input")})
-    assert response.status_code == 504
-    assert calls[1][1:] == ["rm", "-f", calls[0][calls[0].index("--name") + 1]]
+    files = {"file": ("model.onnx", b"onnx-input")}
+    assert client.post(path, headers=headers, files=files).status_code == 504
+    monkeypatch.setattr(settings, "nb_converter_command", [sys.executable, "-c", "pass"])
+    assert client.post(path, headers=headers, files=files).status_code == 422
