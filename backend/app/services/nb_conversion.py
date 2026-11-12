@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
+import signal
 import subprocess
+from contextlib import suppress
 from pathlib import Path
 from typing import Literal
-from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -18,59 +20,64 @@ def nb_conversion_status(project: Project) -> Literal["ready", "unconfigured"] |
     projects = {value.strip() for value in settings.nb_conversion_projects.split(",")}
     if project.id not in projects and project.name not in projects:
         return None
-    return "ready" if settings.nb_converter_image.strip() else "unconfigured"
+    return "ready" if settings.nb_converter_command else "unconfigured"
 
 
-def _remove_container(name: str) -> None:
+def _stop_converter(process: subprocess.Popen) -> None:
+    if os.name == "posix":
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+    else:
+        process.terminate()
     try:
-        subprocess.run(
-            [settings.docker_binary, "rm", "-f", name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-            check=True,
-        )
-    except (OSError, subprocess.SubprocessError):
-        logger.warning("Could not remove NB conversion container %s", name)
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        if os.name == "posix":
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+        process.wait()
 
 
 def convert_to_nb(source: Path, output_dir: Path) -> Path:
-    name = f"train-platform-nb-{uuid4().hex}"
+    output = output_dir / "model.nb"
     argv = [
-        settings.docker_binary, "run", "--rm", "--name", name, "--pull=never",
-        "--network=none", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
-        "--init", "--log-driver=none", "--user", settings.docker_user,
-        "--pids-limit", str(settings.docker_pids_limit),
-        "--cpus", str(settings.docker_cpu_limit), "--memory", f"{settings.docker_memory_limit_gb}g",
-        "--mount", f"type=bind,source={source},target=/input/model.onnx,readonly",
-        "--mount", f"type=bind,source={output_dir},target=/output",
-        settings.nb_converter_image.strip(), "/input/model.onnx", "/output/model.nb",
+        arg.replace("{input}", str(source))
+        .replace("{output}", str(output))
+        .replace("{output_dir}", str(output_dir))
+        for arg in settings.nb_converter_command
     ]
-    if settings.docker_user.split(":", 1)[0] in {"0", "root", ""}:
-        raise HTTPException(status_code=503, detail="转换容器需要配置非 root 用户")
+    log_path = source.parent / "converter.log"
     try:
-        result = subprocess.run(
+        with log_path.open("wb") as log, subprocess.Popen(
             argv,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=settings.nb_conversion_timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        _remove_container(name)
-        raise HTTPException(status_code=504, detail="模型转换超时，请重试") from exc
+            cwd=settings.nb_converter_workdir,
+            env={**os.environ, "TMPDIR": str(source.parent)},
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=os.name == "posix",
+        ) as process:
+            try:
+                exit_code = process.wait(timeout=settings.nb_conversion_timeout_seconds)
+            except subprocess.TimeoutExpired as exc:
+                _stop_converter(process)
+                raise HTTPException(status_code=504, detail="模型转换超时，请重试") from exc
     except OSError as exc:
-        logger.exception("Could not start the NB conversion container")
+        logger.exception("Could not start the host NB converter")
         raise HTTPException(status_code=503, detail="无法启动 NB 转换器，请联系管理员") from exc
 
-    if result.returncode:
-        logger.warning("NB converter %s exited with code %d", name, result.returncode)
-        if result.returncode in {125, 126, 127}:
-            raise HTTPException(status_code=503, detail="无法启动 NB 转换器，请联系管理员")
-        raise HTTPException(status_code=422, detail="转换失败，请检查 ONNX 与目标设备的兼容性")
+    if exit_code:
+        with log_path.open("rb") as log:
+            log.seek(max(0, log_path.stat().st_size - 4096))
+            diagnostic = log.read(4096).decode("utf-8", errors="replace").strip()
+        logger.warning("NB converter exited with code %d: %s", exit_code, diagnostic)
+        raise HTTPException(status_code=422, detail="模型转换失败，请联系管理员检查转换日志")
 
-    output = output_dir / "model.nb"
-    size = output.stat().st_size if not output.is_symlink() and output.is_file() else 0
+    if output_dir.is_symlink() or output.is_symlink() or not output.is_file():
+        raise HTTPException(status_code=422, detail="转换器未生成有效的 NB 文件")
+    size = output.stat().st_size
     if not size:
         raise HTTPException(status_code=422, detail="转换器未生成有效的 NB 文件")
     if size > settings.nb_conversion_max_bytes:

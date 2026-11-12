@@ -334,18 +334,21 @@ curl --noproxy '*' -fsS http://127.0.0.1/api/v1/health
 
 在振动盘项目详情的「模型转换」中选择包含全部权重的 `.onnx` 文件。转换成功后，当前页面提供「下载 NB」按钮，下载文件沿用原模型名和 `.nb` 后缀。项目负责人、研究员和系统管理员可以转换。每个 API 进程同时运行一次转换。
 
-转换器镜像需使用目标设备对应版本的 SDK 制作并安装到 Linux 服务器的 Docker。镜像入口接收两个位置参数 `/input/model.onnx` 和 `/output/model.nb`。转换成功时将 NB 文件写入第二个参数指定的路径并以状态码 `0` 退出。转换容器没有网络访问，输入只读，使用 `DOCKER_USER` 指定的非 root UID/GID，该用户需与 API 服务的存储目录所有者一致。
+服务器在 `/opt/glh-converter` 中已有宿主机转换脚本、`converter/.venv` 和 `ubuntu-npu:v2.0.10.2` 镜像。平台在配置的目录中以 API 服务账号 `huaciq` 调用宿主机脚本，脚本使用现有虚拟环境完成预处理和校准，再调用 Docker 中的 SDK。该账号需能执行脚本、读取校准资源并访问 Docker。
 
-镜像准备后，在项目根目录的 `.env` 设置以下变量，再重启 `train-platform-api`：
+在项目根目录的 `.env` 中填写已验证的命令，再重启 `train-platform-api`：
 
 | 变量 | 配置 |
 | --- | --- |
-| `NB_CONVERTER_IMAGE` | 本机 Docker 中已安装的转换器镜像引用。留空时项目页面显示未配置。 |
+| `NB_CONVERTER_WORKDIR` | 样例转换命令的执行目录，默认为 `/opt/glh-converter`。 |
+| `NB_CONVERTER_COMMAND` | JSON 参数数组，首项是可执行文件，后续各项是命令参数。`[]` 表示尚未配置。 |
 | `NB_CONVERSION_PROJECTS` | 用逗号分隔的项目名或 ID。默认匹配 `振动盘`、`振动盘项目` 和 `ZDP 点位定位`。 |
 | `NB_CONVERSION_MAX_BYTES` | ONNX 和 NB 文件的大小上限，默认 256 MiB。 |
 | `NB_CONVERSION_TIMEOUT_SECONDS` | 单次转换超时，默认 600 秒。 |
 
-部署验收时，选择训练产物中的真实 ONNX，在网页转换并下载 NB，然后用振动盘设备上的推理软件加载该文件，确认输入输出符合设备要求。
+把样例命令的 ONNX 路径换成 `{input}`、目标 NB 路径换成 `{output}`，输出目录参数可用 `{output_dir}`。若脚本使用目录参数，需把实际生成的文件复制到 `{output}` 指定的 `model.nb`，成功时返回状态码 `0`。命令用逐项参数执行。需要进入虚拟环境或整理产物时，可以把相关步骤放进启动脚本，并把两个路径作为参数传给它。
+
+部署验收时，使用已经跑通的样例 ONNX，在网页转换并下载 NB，检查下载文件能正常加载。转换失败时通过 `journalctl -u train-platform-api` 查看宿主机脚本退出码和日志末尾。
 
 ## 6. SSH、重启和服务状态
 
