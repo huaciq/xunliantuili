@@ -41,6 +41,11 @@ class ProjectRole(str, enum.Enum):
     VIEWER = "viewer"
 
 
+class ProjectType(str, enum.Enum):
+    GENERAL = "general"
+    VIBRATION_FEEDER_POINT = "vibration_feeder_point"
+
+
 class ResourceVersionStatus(str, enum.Enum):
     PROCESSING = "processing"
     READY = "ready"
@@ -109,6 +114,11 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(120), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
+    project_type: Mapped[ProjectType] = mapped_column(
+        Enum(ProjectType, native_enum=False),
+        default=ProjectType.GENERAL,
+        server_default=ProjectType.GENERAL.name,
+    )
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

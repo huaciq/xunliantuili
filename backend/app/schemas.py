@@ -11,6 +11,7 @@ from app.models import (
     GpuModelPolicy,
     ModelStage,
     ProjectRole,
+    ProjectType,
     ResourceVersionStatus,
     SystemRole,
     TrainingRunStatus,
@@ -52,6 +53,11 @@ class ProjectCreate(BaseModel):
 
     name: str = Field(min_length=2, max_length=120, description="项目名称，长度为 2 到 120 个字符")
     description: str = Field(default="", max_length=2000, description="项目描述，可为空")
+    project_type: ProjectType = Field(default=ProjectType.GENERAL, description="项目类型")
+
+
+class ProjectUpdate(BaseModel):
+    project_type: ProjectType = Field(description="项目类型")
 
 
 class ProjectMemberView(BaseModel):
@@ -70,6 +76,7 @@ class ProjectView(BaseModel):
     id: str = Field(description="项目唯一 ID")
     name: str = Field(description="项目名称")
     description: str = Field(description="项目描述")
+    project_type: ProjectType
     created_by: str = Field(description="创建者用户 ID")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最近更新时间")
