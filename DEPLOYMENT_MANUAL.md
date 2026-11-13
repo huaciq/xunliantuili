@@ -330,7 +330,10 @@ curl --noproxy '*' -fsS http://127.0.0.1/api/v1/health
 
 前端是带 hash 的静态资源，通常不需要重启 Nginx；浏览器用 Ctrl+F5 刷新即可。Nginx 配置变更时再执行 `nginx -t && systemctl reload nginx`。
 
-### 5.4 振动盘项目模型转换
+### 5.4 振动盘点定位模型转换
+
+点位训练成功后，打开「振动盘点定位」中的训练任务详情。在真实 ONNX 的产物行点击「转换为 NB」，再下载生成的文件。平台使用该任务的 ONNX、原训练数据版本和训练划分。项目转换已启用、转换器已就绪且账号拥有项目操作权限时，该入口可用。
+
 
 在振动盘项目详情的「模型转换」中选择包含全部权重的点位 `.onnx` 文件。点位模型输入为 `[1,3,128,128]`，输出为 `[1,11]`。「自动使用原训练数据集」按 ONNX 的 SHA-256 匹配用户有权访问的成功训练任务，使用该任务的数据集版本和 `training_split.json`。外部模型可手动选择当前项目的数据集版本，数据集需提供 `train/images` 和 `val/images`，也可将这两个目录放在 `dataset200_point` 下。SDK 使用训练图片做 INT8 校准。转换成功后点击「下载 NB」，下载文件沿用原模型名。项目负责人、研究员和系统管理员可以转换。
 
@@ -347,7 +350,7 @@ NB_CONVERTER_COMMAND='["/bin/bash","./convert.sh","{input}","{dataset}","{output
 | --- | --- |
 | `NB_CONVERTER_WORKDIR` | 样例转换命令的执行目录，默认为 `/opt/glh-converter`。 |
 | `NB_CONVERTER_COMMAND` | JSON 参数数组。平台分别替换 `{input}`、`{dataset}` 和 `{output}`，对应 ONNX 文件、数据集目录和 NB 输出路径。`[]` 表示尚未配置。 |
-| `NB_CONVERSION_PROJECTS` | 用逗号分隔的项目名或 ID。默认匹配 `振动盘`、`振动盘项目` 和 `ZDP 点位定位`。 |
+| `NB_CONVERSION_PROJECTS` | 用逗号分隔的项目名或 ID。默认匹配 `振动盘`、`振动盘项目`、`ZDP 点位定位` 和 `振动盘点定位`。服务器已有该变量时，在现有值中追加新项目名或 ID 后重启后端。 |
 | `NB_CONVERSION_MAX_BYTES` | ONNX 和 NB 文件的大小上限，默认 256 MiB。 |
 | `NB_CONVERSION_TIMEOUT_SECONDS` | 单次转换超时，默认 600 秒。 |
 

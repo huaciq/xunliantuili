@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     docker_memory_limit_gb: int = 16
     docker_shm_size_gb: int = 4
     docker_pids_limit: int = 1024
-    nb_conversion_projects: str = "振动盘,振动盘项目,ZDP 点位定位"
+    nb_conversion_projects: str = "振动盘,振动盘项目,ZDP 点位定位,振动盘点定位"
     nb_converter_workdir: str = "/opt/glh-converter"
     nb_converter_command: list[str] = Field(default_factory=lambda: list(GLH_CONVERTER_COMMAND))
     nb_conversion_max_bytes: int = Field(default=256 * 1024 * 1024, gt=0)

@@ -7,10 +7,10 @@ from fastapi.testclient import TestClient
 from test_auth_projects import auth_header
 from test_resources import _zip_bytes
 
-from app.config import GLH_CONVERTER_COMMAND, settings
+from app.config import GLH_CONVERTER_COMMAND, Settings, settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import TrainingRun, TrainingRunStatus
+from app.models import RunArtifact, TrainingRun, TrainingRunStatus
 from app.services.results import collect_container_results
 
 # Avoid the Windows virtual environment launcher in the timeout test.
@@ -103,9 +103,12 @@ output.write_bytes(b"nb-output")
     )
 
 
-def test_reuses_actual_split_for_downloaded_onnx(conversion_project, monkeypatch):
-    client, headers, path, _ = conversion_project
-    project = client.post("/api/v1/projects", headers=headers, json={"name": "点位训练"}).json()
+@pytest.fixture
+def completed_training(conversion_project, monkeypatch):
+    client, headers, _, _ = conversion_project
+    project = client.post(
+        "/api/v1/projects", headers=headers, json={"name": "振动盘点定位"}
+    ).json()
     project_path = f"/api/v1/projects/{project['id']}"
     dataset_version_id = _upload_dataset(client, headers, project_path, FLAT_DATASET)
     code = client.post(f"{project_path}/code-packages", headers=headers, json={"name": "Trainer"})
@@ -119,15 +122,14 @@ def test_reuses_actual_split_for_downloaded_onnx(conversion_project, monkeypatch
     assert uploaded.status_code == 200, uploaded.text
     templates = client.get("/api/v1/training-templates", headers=headers).json()
     template = next(item for item in templates if item["key"] == "custom_command")
-    created = client.post(
-        f"{project_path}/runs", headers=headers,
-        json={
-            "name": "Point run", "template_id": template["id"],
-            "dataset_version_id": dataset_version_id,
-            "code_version_id": uploaded.json()["versions"][0]["id"],
-            "parameters": {"command": ["python", "train.py"]},
-        },
-    )
+    payload = {
+        "name": "Point run",
+        "template_id": template["id"],
+        "dataset_version_id": dataset_version_id,
+        "code_version_id": uploaded.json()["versions"][0]["id"],
+        "parameters": {"command": ["python", "train.py"]},
+    }
+    created = client.post(f"{project_path}/runs", headers=headers, json=payload)
     assert created.status_code == 201, created.text
     run_id = created.json()["id"]
     output_dir = Path(settings.storage_root) / "runs" / project["id"] / run_id / "output"
@@ -164,6 +166,22 @@ output.write_bytes(b"nb-output")
         settings, "nb_converter_command",
         [PYTHON, "-c", script, "{input}", "{dataset}", "{output}"],
     )
+    artifacts = client.get(f"/api/v1/runs/{run_id}/artifacts", headers=headers).json()
+    return {
+        "project_path": project_path,
+        "run_id": run_id,
+        "onnx_id": next(item["id"] for item in artifacts if item["name"] == "point.onnx"),
+        "split_id": next(item["id"] for item in artifacts if item["name"] == "training_split.json"),
+        "model": model,
+        "payload": payload,
+    }
+
+
+def test_reuses_actual_split_for_downloaded_onnx(
+    conversion_project, completed_training, monkeypatch
+):
+    client, headers, path, _ = conversion_project
+    model = completed_training["model"]
     response = client.post(
         path, headers=headers, files={"file": ("downloaded.onnx", model)}
     )
@@ -189,6 +207,82 @@ output.write_bytes(b"nb-output")
     )
     assert response.status_code == 422
     assert response.json()["detail"].startswith("找不到这份 ONNX 对应的训练划分")
+
+    project_path = completed_training["project_path"]
+    monkeypatch.setattr(settings, "nb_conversion_projects", project_path.rsplit("/", 1)[1])
+    run_id, onnx_id = completed_training["run_id"], completed_training["onnx_id"]
+    run_path = f"/api/v1/runs/{run_id}/artifacts/{onnx_id}/conversions/onnx-to-nb"
+    assert client.post(run_path, headers=user_headers).status_code == 404
+
+    for role, expected_status in (("viewer", 403), ("researcher", 200)):
+        member = client.post(
+            f"{project_path}/members", headers=headers,
+            json={"email": user_credentials["email"], "role": role},
+        )
+        assert member.status_code == 200, member.text
+        result = client.post(run_path, headers=user_headers)
+        assert result.status_code == expected_status, result.text
+
+
+def test_converts_run_artifact_with_its_original_split(
+    conversion_project, completed_training, monkeypatch
+):
+    client, headers, _, _ = conversion_project
+    run_id, onnx_id = completed_training["run_id"], completed_training["onnx_id"]
+    path = f"/api/v1/runs/{run_id}/artifacts/{onnx_id}/conversions/onnx-to-nb"
+    assert client.post(path, headers=headers).status_code == 404
+
+    monkeypatch.setattr(
+        settings, "nb_conversion_projects", Settings.model_fields["nb_conversion_projects"].default
+    )
+    response = client.post(path, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.content == b"nb-output"
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["content-disposition"] == 'attachment; filename="point.nb"'
+
+
+def test_rejects_ineligible_run_artifacts(conversion_project, completed_training, monkeypatch):
+    client, headers, _, _ = conversion_project
+    monkeypatch.setattr(
+        settings, "nb_conversion_projects", Settings.model_fields["nb_conversion_projects"].default
+    )
+    run_id, onnx_id = completed_training["run_id"], completed_training["onnx_id"]
+    path = f"/api/v1/runs/{run_id}/artifacts/{onnx_id}/conversions/onnx-to-nb"
+    unknown = f"/api/v1/runs/{run_id}/artifacts/unknown/conversions/onnx-to-nb"
+    assert client.post(unknown, headers=headers).status_code == 404
+
+    other = client.post(
+        f"{completed_training['project_path']}/runs",
+        headers=headers,
+        json={**completed_training["payload"], "name": "Other run"},
+    )
+    assert other.status_code == 201, other.text
+    other_id = other.json()["id"]
+    with SessionLocal() as db:
+        db.get(TrainingRun, other_id).status = TrainingRunStatus.SUCCEEDED
+        db.commit()
+    other_path = f"/api/v1/runs/{other_id}/artifacts/{onnx_id}/conversions/onnx-to-nb"
+    assert client.post(other_path, headers=headers).status_code == 404
+
+    with SessionLocal() as db:
+        db.get(TrainingRun, run_id).status = TrainingRunStatus.FAILED
+        db.commit()
+    assert client.post(path, headers=headers).status_code == 409
+
+    with SessionLocal() as db:
+        db.get(TrainingRun, run_id).status = TrainingRunStatus.SUCCEEDED
+        onnx = db.get(RunArtifact, onnx_id)
+        onnx.details = {**onnx.details, "development_artifact": True}
+        db.commit()
+    assert client.post(path, headers=headers).status_code == 422
+
+    with SessionLocal() as db:
+        onnx = db.get(RunArtifact, onnx_id)
+        onnx.details = {**onnx.details, "development_artifact": False}
+        db.delete(db.get(RunArtifact, completed_training["split_id"]))
+        db.commit()
+    assert client.post(path, headers=headers).status_code == 422
 
 
 @pytest.mark.parametrize(
