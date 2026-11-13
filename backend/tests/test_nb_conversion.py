@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from test_auth_projects import auth_header
 from test_resources import _zip_bytes
 
-from app.config import GLH_CONVERTER_COMMAND, Settings, settings
+from app.config import GLH_CONVERTER_COMMAND, settings
 from app.database import SessionLocal
 from app.main import app
 from app.models import RunArtifact, TrainingRun, TrainingRunStatus
@@ -44,14 +44,15 @@ def conversion_project(tmp_path_factory, monkeypatch):
     (workdir / "converter").mkdir(parents=True)
     (workdir / "sdk-marker").write_text("ready", encoding="utf-8")
     monkeypatch.setattr(settings, "storage_root", str(storage))
-    monkeypatch.setattr(settings, "nb_conversion_projects", "振动盘转换验收")
     monkeypatch.setattr(settings, "nb_converter_workdir", str(workdir))
     monkeypatch.setattr(settings, "nb_converter_command", [PYTHON, "-c", "pass"])
     monkeypatch.setattr(settings, "nb_conversion_max_bytes", 128)
     with TestClient(app) as client:
         headers = auth_header(client)
         response = client.post(
-            "/api/v1/projects", headers=headers, json={"name": "振动盘转换验收"}
+            "/api/v1/projects",
+            headers=headers,
+            json={"name": "振动盘转换验收", "project_type": "vibration_feeder_point"},
         )
         assert response.status_code == 201
         assert response.json()["nb_conversion"] == "ready"
@@ -177,9 +178,7 @@ output.write_bytes(b"nb-output")
     }
 
 
-def test_reuses_actual_split_for_downloaded_onnx(
-    conversion_project, completed_training, monkeypatch
-):
+def test_reuses_actual_split_for_downloaded_onnx(conversion_project, completed_training):
     client, headers, path, _ = conversion_project
     model = completed_training["model"]
     response = client.post(
@@ -209,7 +208,10 @@ def test_reuses_actual_split_for_downloaded_onnx(
     assert response.json()["detail"].startswith("找不到这份 ONNX 对应的训练划分")
 
     project_path = completed_training["project_path"]
-    monkeypatch.setattr(settings, "nb_conversion_projects", project_path.rsplit("/", 1)[1])
+    typed = client.patch(
+        project_path, headers=headers, json={"project_type": "vibration_feeder_point"}
+    )
+    assert typed.status_code == 200, typed.text
     run_id, onnx_id = completed_training["run_id"], completed_training["onnx_id"]
     run_path = f"/api/v1/runs/{run_id}/artifacts/{onnx_id}/conversions/onnx-to-nb"
     assert client.post(run_path, headers=user_headers).status_code == 404
@@ -224,17 +226,18 @@ def test_reuses_actual_split_for_downloaded_onnx(
         assert result.status_code == expected_status, result.text
 
 
-def test_converts_run_artifact_with_its_original_split(
-    conversion_project, completed_training, monkeypatch
-):
+def test_converts_run_artifact_with_its_original_split(conversion_project, completed_training):
     client, headers, _, _ = conversion_project
     run_id, onnx_id = completed_training["run_id"], completed_training["onnx_id"]
     path = f"/api/v1/runs/{run_id}/artifacts/{onnx_id}/conversions/onnx-to-nb"
     assert client.post(path, headers=headers).status_code == 404
 
-    monkeypatch.setattr(
-        settings, "nb_conversion_projects", Settings.model_fields["nb_conversion_projects"].default
+    typed = client.patch(
+        completed_training["project_path"],
+        headers=headers,
+        json={"project_type": "vibration_feeder_point"},
     )
+    assert typed.status_code == 200, typed.text
     response = client.post(path, headers=headers)
     assert response.status_code == 200, response.text
     assert response.content == b"nb-output"
@@ -242,11 +245,14 @@ def test_converts_run_artifact_with_its_original_split(
     assert response.headers["content-disposition"] == 'attachment; filename="point.nb"'
 
 
-def test_rejects_ineligible_run_artifacts(conversion_project, completed_training, monkeypatch):
+def test_rejects_ineligible_run_artifacts(conversion_project, completed_training):
     client, headers, _, _ = conversion_project
-    monkeypatch.setattr(
-        settings, "nb_conversion_projects", Settings.model_fields["nb_conversion_projects"].default
+    typed = client.patch(
+        completed_training["project_path"],
+        headers=headers,
+        json={"project_type": "vibration_feeder_point"},
     )
+    assert typed.status_code == 200, typed.text
     run_id, onnx_id = completed_training["run_id"], completed_training["onnx_id"]
     path = f"/api/v1/runs/{run_id}/artifacts/{onnx_id}/conversions/onnx-to-nb"
     unknown = f"/api/v1/runs/{run_id}/artifacts/unknown/conversions/onnx-to-nb"
@@ -300,7 +306,13 @@ def test_needs_configured_converter_and_eligible_project(conversion_project, mon
     files = {"file": ("model.onnx", b"onnx-input")}
     monkeypatch.setattr(settings, "nb_converter_command", list(GLH_CONVERTER_COMMAND))
     assert client.post(path, headers=headers, data=form, files=files).status_code == 503
-    monkeypatch.setattr(settings, "nb_conversion_projects", "another-project")
+    changed = client.patch(
+        path.removesuffix("/conversions/onnx-to-nb"),
+        headers=headers,
+        json={"project_type": "general"},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["nb_conversion"] is None
     assert client.post(path, headers=headers, data=form, files=files).status_code == 404
 
 
@@ -313,11 +325,14 @@ def test_conversion_without_output_is_rejected(conversion_project):
     assert response.headers.get("content-disposition") is None
 
 
-def test_rejects_calibration_dataset_from_another_project(conversion_project, monkeypatch):
+def test_rejects_calibration_dataset_from_another_project(conversion_project):
     client, headers, _, form = conversion_project
-    project = client.post("/api/v1/projects", headers=headers, json={"name": "另一个振动盘项目"})
+    project = client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"name": "另一个振动盘项目", "project_type": "vibration_feeder_point"},
+    )
     assert project.status_code == 201
-    monkeypatch.setattr(settings, "nb_conversion_projects", project.json()["id"])
     response = client.post(
         f"/api/v1/projects/{project.json()['id']}/conversions/onnx-to-nb",
         headers=headers, data=form, files={"file": ("model.onnx", b"onnx-input")},

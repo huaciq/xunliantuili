@@ -13,7 +13,7 @@ from typing import Literal
 from fastapi import HTTPException
 
 from app.config import GLH_CONVERTER_COMMAND, settings
-from app.models import Project
+from app.models import Project, ProjectType
 
 logger = logging.getLogger(__name__)
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -22,8 +22,7 @@ DATASET_MOUNT = PurePosixPath("/workspace/dataset")
 
 
 def nb_conversion_status(project: Project) -> Literal["ready", "unconfigured"] | None:
-    projects = {value.strip() for value in settings.nb_conversion_projects.split(",")}
-    if project.id not in projects and project.name not in projects:
+    if project.project_type != ProjectType.VIBRATION_FEEDER_POINT:
         return None
     command = tuple(settings.nb_converter_command)
     if not command:

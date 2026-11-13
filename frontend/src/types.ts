@@ -1,5 +1,6 @@
 export type SystemRole = 'system_admin' | 'user'
 export type ProjectRole = 'project_owner' | 'researcher' | 'viewer'
+export type ProjectType = 'general' | 'vibration_feeder_point'
 
 export interface User {
   id: string
@@ -21,6 +22,7 @@ export interface Project {
   id: string
   name: string
   description: string
+  project_type: ProjectType
   created_by: string
   created_at: string
   updated_at: string

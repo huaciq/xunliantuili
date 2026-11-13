@@ -6,7 +6,13 @@ from sqlalchemy.orm import selectinload
 
 from app.deps import CurrentUser, DbSession, get_project_role
 from app.models import AuditLog, Project, ProjectMember, ProjectRole, SystemRole, User
-from app.schemas import ProjectCreate, ProjectMemberAdd, ProjectMemberView, ProjectView
+from app.schemas import (
+    ProjectCreate,
+    ProjectMemberAdd,
+    ProjectMemberView,
+    ProjectUpdate,
+    ProjectView,
+)
 from app.services.nb_conversion import nb_conversion_status
 
 router = APIRouter(prefix="/projects", tags=["项目与成员"])
@@ -18,6 +24,7 @@ def to_project_view(project: Project, current_user: User) -> ProjectView:
         id=project.id,
         name=project.name,
         description=project.description,
+        project_type=project.project_type,
         created_by=project.created_by,
         created_at=project.created_at,
         updated_at=project.updated_at,
@@ -79,7 +86,10 @@ def list_projects(db: DbSession, user: CurrentUser) -> list[ProjectView]:
 )
 def create_project(payload: ProjectCreate, db: DbSession, user: CurrentUser) -> ProjectView:
     project = Project(
-        name=payload.name.strip(), description=payload.description.strip(), created_by=user.id
+        name=payload.name.strip(),
+        description=payload.description.strip(),
+        project_type=payload.project_type,
+        created_by=user.id,
     )
     db.add(project)
     db.flush()
@@ -106,6 +116,31 @@ def create_project(payload: ProjectCreate, db: DbSession, user: CurrentUser) -> 
 def get_project(project_id: str, db: DbSession, user: CurrentUser) -> ProjectView:
     project = load_project(db, project_id)
     ensure_project_access(db, project, user)
+    return to_project_view(project, user)
+
+
+@router.patch("/{project_id}", response_model=ProjectView, summary="更新项目类型")
+def update_project(
+    project_id: str, payload: ProjectUpdate, db: DbSession, user: CurrentUser
+) -> ProjectView:
+    project = load_project(db, project_id)
+    role = ensure_project_access(db, project, user)
+    if user.system_role != SystemRole.ADMIN and role != ProjectRole.OWNER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner access required")
+
+    if project.project_type != payload.project_type:
+        previous_type = project.project_type
+        project.project_type = payload.project_type
+        db.add(
+            AuditLog(
+                actor_id=user.id,
+                action="project.type.update",
+                resource_type="project",
+                resource_id=project.id,
+                detail=f"{previous_type.value} -> {payload.project_type.value}",
+            )
+        )
+        db.commit()
     return to_project_view(project, user)
 
 
