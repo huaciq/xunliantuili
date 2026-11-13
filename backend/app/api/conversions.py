@@ -3,7 +3,7 @@ from pathlib import Path, PurePosixPath
 from shutil import copyfileobj
 from tempfile import TemporaryDirectory
 from threading import Lock
-from typing import Annotated
+from typing import Annotated, BinaryIO
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -16,6 +16,7 @@ from app.deps import CurrentUser, DbSession
 from app.models import (
     Dataset,
     DatasetVersion,
+    Project,
     ProjectMember,
     ProjectRole,
     ResourceVersionStatus,
@@ -34,7 +35,7 @@ from app.services.nb_conversion import (
 )
 from app.services.scheduler import _resolve_storage_path
 
-router = APIRouter(prefix="/projects", tags=["模型转换"])
+router = APIRouter(tags=["模型转换"])
 conversion_slot = Lock()
 
 
@@ -85,7 +86,7 @@ def _find_training_split(
 
 
 @router.post(
-    "/{project_id}/conversions/onnx-to-nb",
+    "/projects/{project_id}/conversions/onnx-to-nb",
     response_class=FileResponse,
     responses={
         200: {
@@ -106,24 +107,10 @@ def convert_onnx(
     ] = None,
 ) -> FileResponse:
     project = load_project(db, project_id)
-    role = ensure_project_access(db, project, user)
-    if user.system_role != SystemRole.ADMIN and role not in (
-        ProjectRole.OWNER, ProjectRole.RESEARCHER,
-    ):
-        raise HTTPException(status_code=403, detail="当前账号没有模型转换权限")
-
-    converter_status = nb_conversion_status(project)
-    if converter_status is None:
-        raise HTTPException(status_code=404, detail="该项目未启用 NB 转换")
-    if converter_status == "unconfigured":
-        raise HTTPException(status_code=503, detail="服务器尚未配置 NB 转换器")
+    _ensure_conversion_access(db, project, user)
 
     filename = PurePosixPath((file.filename or "").replace("\\", "/")).name
-    if PurePosixPath(filename).suffix.lower() != ".onnx" or not file.size:
-        raise HTTPException(status_code=422, detail="请选择非空的 .onnx 文件")
-    if file.size > settings.nb_conversion_max_bytes:
-        limit = settings.nb_conversion_max_bytes
-        raise HTTPException(status_code=413, detail=f"ONNX 文件大小超过 {limit:,} 字节限制")
+    _validate_onnx(filename, file.size)
 
     version = None
     if dataset_version_id is not None:
@@ -137,30 +124,131 @@ def convert_onnx(
         if version.status != ResourceVersionStatus.READY:
             raise HTTPException(status_code=409, detail="数据集版本尚未就绪")
 
+    model_sha256 = file_digest(file.file, "sha256").hexdigest()
+    file.file.seek(0)
+    storage = storage_root()
+    match = _find_training_split(db, user, dataset_version_id, model_sha256, storage)
+    training_split = None
+    if match is not None:
+        version, training_split = match
+    if version is None:
+        raise HTTPException(
+            status_code=422,
+            detail="找不到这份 ONNX 对应的训练划分，请选择已划分训练图和验证图的数据集版本",
+        )
+    try:
+        cache = _resolve_storage_path(storage, version.cache_uri)
+        dataset_root = (
+            cache if training_split else _resolve_storage_path(cache, version.root_subpath)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="数据集目录不可用") from exc
+    db.close()
+    return _convert_model(filename, file.file, dataset_root, training_split)
+
+
+@router.post(
+    "/runs/{run_id}/artifacts/{artifact_id}/conversions/onnx-to-nb",
+    response_class=FileResponse,
+    summary="使用训练产物转换为 NB",
+)
+def convert_run_onnx(
+    run_id: str, artifact_id: str, db: DbSession, user: CurrentUser
+) -> FileResponse:
+    run = db.get(TrainingRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="找不到训练任务")
+    project = load_project(db, run.project_id)
+    _ensure_conversion_access(db, project, user)
+    if run.status != TrainingRunStatus.SUCCEEDED:
+        raise HTTPException(status_code=409, detail="训练成功后才能转换模型")
+
+    artifact = db.get(RunArtifact, artifact_id)
+    if artifact is None or artifact.run_id != run.id:
+        raise HTTPException(status_code=404, detail="找不到该任务的模型产物")
+    if (
+        artifact.artifact_type != "export"
+        or PurePosixPath(artifact.name).suffix.lower() != ".onnx"
+        or artifact.details.get("development_artifact") is not False
+    ):
+        raise HTTPException(status_code=422, detail="请选择实际训练导出的 ONNX 产物")
+
+    split = db.scalar(
+        select(RunArtifact).where(
+            RunArtifact.run_id == run.id,
+            RunArtifact.artifact_type == "report",
+            RunArtifact.name == "training_split.json",
+        )
+    )
+    if split is None:
+        raise HTTPException(status_code=422, detail="该任务缺少原训练划分")
+
+    version = db.scalar(
+        select(DatasetVersion)
+        .join(Dataset)
+        .where(
+            DatasetVersion.id == run.dataset_version_id,
+            Dataset.project_id == project.id,
+            DatasetVersion.status == ResourceVersionStatus.READY,
+        )
+    )
+    if version is None:
+        raise HTTPException(status_code=422, detail="该任务的原训练数据集版本不可用")
+
+    storage = storage_root()
+    output_root = storage / "runs" / project.id / run.id / "output"
+    model = _run_artifact_path(storage, output_root, artifact)
+    training_split = _run_artifact_path(storage, output_root, split)
+    _validate_onnx(artifact.name, model.stat().st_size)
+    try:
+        dataset_root = _resolve_storage_path(storage, version.cache_uri)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="数据集目录不可用") from exc
+    filename = PurePosixPath(artifact.name).name
+    db.close()
+    with model.open("rb") as file:
+        return _convert_model(filename, file, dataset_root, training_split)
+
+
+def _run_artifact_path(storage: Path, output_root: Path, artifact: RunArtifact) -> Path:
+    try:
+        path = _resolve_storage_path(storage, artifact.uri)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="训练产物文件不可用") from exc
+    if not path.is_relative_to(output_root) or not path.is_file():
+        raise HTTPException(status_code=404, detail="训练产物文件不可用")
+    return path
+
+
+def _ensure_conversion_access(db: DbSession, project: Project, user: User) -> None:
+    role = ensure_project_access(db, project, user)
+    if user.system_role != SystemRole.ADMIN and role not in (
+        ProjectRole.OWNER, ProjectRole.RESEARCHER,
+    ):
+        raise HTTPException(status_code=403, detail="当前账号没有模型转换权限")
+
+    converter_status = nb_conversion_status(project)
+    if converter_status is None:
+        raise HTTPException(status_code=404, detail="该项目未启用 NB 转换")
+    if converter_status == "unconfigured":
+        raise HTTPException(status_code=503, detail="服务器尚未配置 NB 转换器")
+
+
+def _validate_onnx(filename: str, size: int | None) -> None:
+    if PurePosixPath(filename).suffix.lower() != ".onnx" or not size:
+        raise HTTPException(status_code=422, detail="请选择非空的 .onnx 文件")
+    if size > settings.nb_conversion_max_bytes:
+        limit = settings.nb_conversion_max_bytes
+        raise HTTPException(status_code=413, detail=f"ONNX 文件大小超过 {limit:,} 字节限制")
+
+
+def _convert_model(
+    filename: str, file: BinaryIO, dataset_root: Path, training_split: Path | None
+) -> FileResponse:
     if not conversion_slot.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="已有模型正在转换，请稍后重试")
     workspace = None
     try:
-        model_sha256 = file_digest(file.file, "sha256").hexdigest()
-        file.file.seek(0)
-        storage = storage_root()
-        match = _find_training_split(db, user, dataset_version_id, model_sha256, storage)
-        training_split = None
-        if match is not None:
-            version, training_split = match
-        if version is None:
-            raise HTTPException(
-                status_code=422,
-                detail="找不到这份 ONNX 对应的训练划分，请选择已划分训练图和验证图的数据集版本",
-            )
-        try:
-            cache = _resolve_storage_path(storage, version.cache_uri)
-            dataset_root = (
-                cache if training_split else _resolve_storage_path(cache, version.root_subpath)
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="数据集目录不可用") from exc
-        db.close()
         try:
             workspace = TemporaryDirectory(prefix="platform-", dir=conversion_task_root())
         except OSError as exc:
@@ -170,7 +258,7 @@ def convert_onnx(
         output_dir.mkdir()
         dataset = stage_calibration_dataset(dataset_root, root, training_split)
         with source.open("wb") as target:
-            copyfileobj(file.file, target)
+            copyfileobj(file, target)
         output = convert_to_nb(source, dataset, output_dir)
         return FileResponse(
             output,
