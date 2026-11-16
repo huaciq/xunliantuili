@@ -43,7 +43,6 @@ def test_admin_can_create_user_and_project() -> None:
         project = project_response.json()
         assert project["name"] == "Defect Detection"
         assert project["current_user_role"] == "project_owner"
-        assert project["project_type"] == "general"
 
         member_response = client.post(
             f"/api/v1/projects/{project['id']}/members",
@@ -52,22 +51,3 @@ def test_admin_can_create_user_and_project() -> None:
         )
         assert member_response.status_code == 200
         assert member_response.json()["role"] == "researcher"
-
-
-        project_url = f"/api/v1/projects/{project['id']}"
-        login = client.post(
-            "/api/v1/auth/login",
-            json={"email": "researcher@example.com", "password": "Research123!"},
-        )
-        assert login.status_code == 200
-        researcher_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        payload = {"project_type": "vibration_feeder_point"}
-        forbidden = client.patch(project_url, headers=researcher_headers, json=payload)
-        assert forbidden.status_code == 403
-
-        updated = client.patch(project_url, headers=headers, json=payload)
-        assert updated.status_code == 200
-        assert updated.json()["project_type"] == "vibration_feeder_point"
-        assert updated.json()["nb_conversion"] in ("ready", "unconfigured")
-        project_details = client.get(project_url, headers=headers).json()
-        assert project_details["project_type"] == payload["project_type"]

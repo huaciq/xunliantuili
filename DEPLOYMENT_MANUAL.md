@@ -330,43 +330,6 @@ curl --noproxy '*' -fsS http://127.0.0.1/api/v1/health
 
 前端是带 hash 的静态资源，通常不需要重启 Nginx；浏览器用 Ctrl+F5 刷新即可。Nginx 配置变更时再执行 `nginx -t && systemctl reload nginx`。
 
-### 5.4 振动盘点定位模型转换
-
-新建项目时选择「振动盘点位定位」类型，已有项目可由负责人或管理员在「项目设置」中选择。点位训练成功后，打开训练任务详情。在真实 ONNX 的产物行点击「转换为 NB」，再下载生成的文件。平台使用该任务的 ONNX、原训练数据版本和训练划分。转换器已就绪且账号拥有项目操作权限时，该入口可用。
-
-本次升级先执行 Alembic 迁移。迁移会根据旧的项目名或 ID 名单一次性回填已有项目类型。升级后，转换入口读取数据库中的项目类型，项目改名不会改变转换资格。若原名单未包含某个点位项目，在该项目的「项目设置」中补选类型。
-
-
-在振动盘项目详情的「模型转换」中选择包含全部权重的点位 `.onnx` 文件。点位模型输入为 `[1,3,128,128]`，输出为 `[1,11]`。「自动使用原训练数据集」按 ONNX 的 SHA-256 匹配用户有权访问的成功训练任务，使用该任务的数据集版本和 `training_split.json`。外部模型可手动选择当前项目的数据集版本，数据集需提供 `train/images` 和 `val/images`，也可将这两个目录放在 `dataset200_point` 下。SDK 使用训练图片做 INT8 校准。转换成功后点击「下载 NB」，下载文件沿用原模型名。项目负责人、研究员和系统管理员可以转换。
-
-服务器在 `/opt/glh-converter` 中已有宿主机转换脚本、`converter/.venv` 和 `ubuntu-npu:v2.0.10.2` 镜像。平台在配置的目录中以 API 服务账号 `huaciq` 调用宿主机脚本，脚本使用现有虚拟环境完成预处理和校准，再调用 Docker 中的 SDK。该账号需能执行脚本、读取校准资源并访问 Docker。
-
-平台默认使用以下配置。部署包位于 `/opt/glh-converter` 时可以直接使用，项目根目录的 `.env` 可覆盖这些值：
-
-```dotenv
-NB_CONVERTER_WORKDIR=/opt/glh-converter
-NB_CONVERTER_COMMAND='["/bin/bash","./convert.sh","{input}","{dataset}","{output}"]'
-```
-
-| 变量 | 配置 |
-| --- | --- |
-| `NB_CONVERTER_WORKDIR` | 样例转换命令的执行目录，默认为 `/opt/glh-converter`。 |
-| `NB_CONVERTER_COMMAND` | JSON 参数数组。平台分别替换 `{input}`、`{dataset}` 和 `{output}`，对应 ONNX 文件、数据集目录和 NB 输出路径。`[]` 表示尚未配置。 |
-| `NB_CONVERSION_MAX_BYTES` | ONNX 和 NB 文件的大小上限，默认 256 MiB。 |
-| `NB_CONVERSION_TIMEOUT_SECONDS` | 单次转换超时，默认 600 秒。 |
-
-平台将任务放在 `/opt/glh-converter/converter/tasks/` 下，输出为任务内的 `output/result.nb`。API 服务账号需能在 `converter/tasks` 和 `converter/sdk-workspace` 中创建目录。若安装时这两个目录由 root 创建，按服务账号配置目录权限后重启 API：
-
-```bash
-sudo install -d -o huaciq -g huaciq -m 0750 \
-  /opt/glh-converter/converter/tasks /opt/glh-converter/converter/sdk-workspace
-sudo -u huaciq test -x /opt/glh-converter/converter/.venv/bin/python
-sudo -u huaciq docker image inspect ubuntu-npu:v2.0.10.2 >/dev/null
-sudo systemctl restart train-platform-api
-```
-
-部署验收时，使用已跑通的样例 ONNX 和对应校准数据，从网页转换并下载 NB，检查下载文件能正常加载。转换失败时通过 `journalctl -u train-platform-api` 查看宿主机脚本退出码和日志末尾。
-
 ## 6. SSH、重启和服务状态
 
 关闭 SSH 不会停止服务：

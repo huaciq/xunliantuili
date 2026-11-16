@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { ArrowRight, FolderKanban, Plus, RefreshCw } from 'lucide-vue-next'
-import { NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpin, useMessage } from 'naive-ui'
+import { NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSpin, useMessage } from 'naive-ui'
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { errorMessage } from '../api'
-import { projectTypeOptions } from '../projectTypes'
-import type { Project, ProjectType } from '../types'
+import type { Project } from '../types'
 
 const router = useRouter()
 const message = useMessage()
@@ -13,9 +12,7 @@ const projects = ref<Project[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const showCreate = ref(false)
-const form = reactive<{ name: string; description: string; project_type: ProjectType }>({
-  name: '', description: '', project_type: 'general',
-})
+const form = reactive({ name: '', description: '' })
 
 async function load() {
   loading.value = true
@@ -30,7 +27,7 @@ async function createProject() {
   try {
     const project = (await api.post<Project>('/projects', form)).data
     showCreate.value = false
-    Object.assign(form, { name: '', description: '', project_type: 'general' })
+    Object.assign(form, { name: '', description: '' })
     await router.push(`/projects/${project.id}`)
   } catch (error) { message.error(errorMessage(error)); return false }
   finally { saving.value = false }
@@ -64,7 +61,6 @@ onMounted(load)
     <NModal v-model:show="showCreate" preset="dialog" title="新建项目" positive-text="创建" negative-text="取消" :loading="saving" @positive-click="createProject">
       <NForm :model="form" label-placement="top">
         <NFormItem label="项目名称"><NInput v-model:value="form.name" maxlength="120" /></NFormItem>
-        <NFormItem label="项目类型"><NSelect v-model:value="form.project_type" :options="projectTypeOptions" /></NFormItem>
         <NFormItem label="项目说明"><NInput v-model:value="form.description" type="textarea" maxlength="2000" :rows="3" /></NFormItem>
       </NForm>
     </NModal>

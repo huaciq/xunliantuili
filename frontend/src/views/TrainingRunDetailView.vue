@@ -1,26 +1,20 @@
 <script setup lang="ts">
-import { isAxiosError } from 'axios'
 import { ArrowLeft, BarChart3, CircleStop, Download, FileBox, PackagePlus, RefreshCw, Terminal } from 'lucide-vue-next'
 import { NAlert, NButton, NDescriptions, NDescriptionsItem, NForm, NFormItem, NInput, NModal, NSelect, NSpin, NTag, useDialog, useMessage } from 'naive-ui'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import api, { errorMessage, websocketUrl } from '../api'
-import { useAuthStore } from '../stores/auth'
-import type { MetricPoint, Project, RunArtifact, TrainingRun, TrainingRunStatus } from '../types'
+import type { MetricPoint, RunArtifact, TrainingRun, TrainingRunStatus } from '../types'
 
 const route = useRoute()
 const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
-const auth = useAuthStore()
 const run = ref<TrainingRun | null>(null)
 const logs = ref<string[]>([])
 const metrics = ref<MetricPoint[]>([])
 const artifacts = ref<RunArtifact[]>([])
-const conversionProject = ref<Project | null>(null)
-const convertingId = ref<string | null>(null)
-const nbResult = shallowRef<{ artifactId: string; file: Blob; name: string } | null>(null)
 const loading = ref(false)
 const registering = ref(false)
 const showRegister = ref(false)
@@ -31,23 +25,6 @@ let reconnectTimer: number | null = null
 const terminalStatuses = new Set<TrainingRunStatus>(['succeeded', 'failed', 'stopped'])
 const canStop = computed(() => run.value && ['queued', 'preparing', 'starting', 'running'].includes(run.value.status))
 const canRegister = computed(() => run.value?.status === 'succeeded' && artifacts.value.some((item) => item.artifact_type === 'checkpoint'))
-const convertibleArtifactIds = computed(() => {
-  const currentRun = run.value
-  if (currentRun?.status !== 'succeeded' || currentRun.id !== route.params.runId) return new Set<string>()
-  const runArtifacts = artifacts.value.filter((artifact) => artifact.run_id === currentRun.id)
-  if (!runArtifacts.some((artifact) => artifact.artifact_type === 'report' && artifact.name === 'training_split.json')) {
-    return new Set<string>()
-  }
-  return new Set(runArtifacts.filter((artifact) =>
-    artifact.artifact_type === 'export' && /\.onnx$/i.test(artifact.name) && artifact.details.development_artifact === false,
-  ).map((artifact) => artifact.id))
-})
-const nbConversionStatus = computed(() => {
-  const project = conversionProject.value
-  if (!project || project.id !== run.value?.project_id) return null
-  const role = project.current_user_role
-  return auth.isAdmin || role === 'project_owner' || role === 'researcher' ? project.nb_conversion : null
-})
 const metricGroups = computed(() => {
   const groups = new Map<string, MetricPoint[]>()
   for (const point of metrics.value) groups.set(point.key, [...(groups.get(point.key) ?? []), point])
@@ -56,20 +33,14 @@ const metricGroups = computed(() => {
 
 async function load() {
   loading.value = true
-  conversionProject.value = null
   try {
-    const currentRun = (await api.get<TrainingRun>(`/runs/${route.params.runId}`)).data
-    run.value = currentRun
+    run.value = (await api.get<TrainingRun>(`/runs/${route.params.runId}`)).data
     const [metricResponse, artifactResponse] = await Promise.all([
-      api.get<MetricPoint[]>(`/runs/${currentRun.id}/metrics`),
-      api.get<RunArtifact[]>(`/runs/${currentRun.id}/artifacts`),
+      api.get<MetricPoint[]>(`/runs/${route.params.runId}/metrics`),
+      api.get<RunArtifact[]>(`/runs/${route.params.runId}/artifacts`),
     ])
     metrics.value = metricResponse.data
     artifacts.value = artifactResponse.data
-    if (convertibleArtifactIds.value.size) {
-      const { data: project } = await api.get<Project>(`/projects/${currentRun.project_id}`)
-      if (currentRun.id === route.params.runId) conversionProject.value = project
-    }
   }
   catch (error) { message.error(errorMessage(error)) }
   finally { loading.value = false }
@@ -88,50 +59,14 @@ async function registerModel() {
 
 async function downloadArtifact(artifact: RunArtifact) {
   try {
-    const response = await api.get<Blob>(`/artifacts/${artifact.id}/download`, { responseType: 'blob' })
-    downloadBlob(response.data, artifact.name)
+    const response = await api.get(`/artifacts/${artifact.id}/download`, { responseType: 'blob' })
+    const url = URL.createObjectURL(response.data)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = artifact.name
+    anchor.click()
+    URL.revokeObjectURL(url)
   } catch (error) { message.error(errorMessage(error)) }
-}
-
-function downloadBlob(file: Blob, name: string) {
-  const url = URL.createObjectURL(file)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = name
-  anchor.click()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-async function conversionError(error: unknown) {
-  if (isAxiosError(error) && error.response?.data instanceof Blob) {
-    try {
-      const payload = JSON.parse(await error.response.data.text())
-      if (typeof payload?.detail === 'string') return payload.detail
-    } catch {
-      // A reverse proxy may return a non-JSON response.
-    }
-  }
-  return errorMessage(error)
-}
-
-async function convertToNb(artifact: RunArtifact) {
-  const currentRun = run.value
-  if (!currentRun || convertingId.value || nbConversionStatus.value !== 'ready' || !convertibleArtifactIds.value.has(artifact.id)) return
-  convertingId.value = artifact.id
-  try {
-    const response = await api.post<Blob>(
-      `/runs/${currentRun.id}/artifacts/${artifact.id}/conversions/onnx-to-nb`,
-      undefined,
-      { responseType: 'blob', timeout: 0 },
-    )
-    const basename = artifact.name.split('/').at(-1) ?? artifact.name
-    const stem = Array.from(basename.slice(0, -5)).slice(0, 200).join('')
-    nbResult.value = { artifactId: artifact.id, file: response.data, name: `${stem}.nb` }
-  } catch (error) {
-    message.error(await conversionError(error))
-  } finally {
-    convertingId.value = null
-  }
 }
 
 function formatBytes(bytes: number) {
@@ -224,25 +159,8 @@ onBeforeUnmount(() => {
         </section>
         <section v-if="artifacts.length" class="content-section result-section">
           <header class="section-header"><div><h2>训练产物</h2><p>checkpoint、指标报告和模型导出文件。</p></div><FileBox :size="20" /></header>
-          <NAlert v-if="convertibleArtifactIds.size && nbConversionStatus === 'unconfigured'" type="warning" class="conversion-notice">
-            服务器尚未配置 NB 转换器。
-          </NAlert>
           <div class="artifact-list">
-            <div v-for="artifact in artifacts" :key="artifact.id" class="artifact-row">
-              <div><strong>{{ artifact.name }}</strong><span>{{ artifact.artifact_type }} · {{ formatBytes(artifact.size_bytes) }}</span></div>
-              <code>{{ artifact.sha256.slice(0, 12) }}</code>
-              <div class="artifact-actions">
-                <template v-if="nbConversionStatus === 'ready' && convertibleArtifactIds.has(artifact.id)">
-                  <NButton v-if="nbResult?.artifactId === artifact.id" size="small" secondary @click="downloadBlob(nbResult.file, nbResult.name)">
-                    下载 NB
-                  </NButton>
-                  <NButton v-else size="small" secondary :loading="convertingId === artifact.id" :disabled="convertingId !== null" @click="convertToNb(artifact)">
-                    转换为 NB
-                  </NButton>
-                </template>
-                <NButton quaternary circle title="下载" @click="downloadArtifact(artifact)"><Download :size="17" /></NButton>
-              </div>
-            </div>
+            <div v-for="artifact in artifacts" :key="artifact.id"><div><strong>{{ artifact.name }}</strong><span>{{ artifact.artifact_type }} · {{ formatBytes(artifact.size_bytes) }}</span></div><code>{{ artifact.sha256.slice(0, 12) }}</code><NButton quaternary circle title="下载" @click="downloadArtifact(artifact)"><Download :size="17" /></NButton></div>
           </div>
         </section>
         <section class="terminal-panel">
@@ -264,16 +182,3 @@ onBeforeUnmount(() => {
     </NModal>
   </section>
 </template>
-
-<style scoped>
-.conversion-notice { margin-bottom: 12px; }
-.artifact-list > .artifact-row { grid-template-columns: minmax(0, 1fr) 120px auto; }
-.artifact-row strong { overflow-wrap: anywhere; }
-.artifact-row > .artifact-actions { flex-direction: row; align-items: center; gap: 8px; }
-
-@media (max-width: 520px) {
-  .artifact-list > .artifact-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .artifact-row > code { grid-column: 1; grid-row: 2; }
-  .artifact-row > .artifact-actions { grid-column: 2; grid-row: 1 / span 2; }
-}
-</style>
