@@ -10,7 +10,7 @@ const auth = useAuthStore()
 const router = useRouter()
 const message = useMessage()
 const submitting = ref(false)
-const form = reactive({ email: 'admin@example.com', password: 'ChangeMe123!' })
+const form = reactive({ email: 'admin@example.com', password: '123456' })
 
 async function submit() {
   submitting.value = true

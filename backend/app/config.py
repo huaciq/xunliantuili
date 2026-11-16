@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     max_collected_artifacts: int = 200
     max_collected_artifact_bytes: int = 20 * 1024 * 1024 * 1024
     bootstrap_admin_email: str = "admin@example.com"
-    bootstrap_admin_password: str = "ChangeMe123!"
+    bootstrap_admin_password: str = "123456"
     bootstrap_admin_name: str = "Platform Admin"
     auto_create_tables: bool = True
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

@@ -65,7 +65,7 @@ Web 地址：`http://127.0.0.1:5173`
 
 ```text
 admin@example.com
-ChangeMe123!
+123456
 ```
 
 部署前必须在根目录 `.env` 中更换管理员密码和 `APP_SECRET_KEY`。

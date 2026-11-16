@@ -23,9 +23,9 @@ class LoginRequest(BaseModel):
 
     email: EmailStr = Field(description="登录邮箱，例如 admin@example.com")
     password: str = Field(
-        min_length=8,
+        min_length=6,
         max_length=128,
-        description="登录密码，长度为 8 到 128 个字符",
+        description="登录密码，长度为 6 到 128 个字符",
     )
 
 
