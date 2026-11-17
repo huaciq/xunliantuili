@@ -11,7 +11,7 @@ import os
 import re
 import runpy
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 LOSS_LINE = re.compile(r"^Epoch (\d+): Train Loss = ([0-9.eE+-]+), Val Loss = ([0-9.eE+-]+)$")
 
@@ -43,6 +43,60 @@ class MetricLog:
 
     def __getattr__(self, name):
         return getattr(self.stream, name)
+
+
+def restore_source_split_order(loaders, manifest):
+    """Restore the original dataset indices before DataLoader shuffling.
+
+    The source trainer sorts each prepared directory, while its flat-directory
+    train_test_split returns a different order. Identical RNG seeds only produce
+    identical batches when those dataset indices also identify the same images.
+    """
+    source = manifest.get("source_split")
+    if not isinstance(source, dict):
+        raise ValueError("split_manifest.json is missing source_split")
+    plans = []
+    for partition, loader in zip(("train", "val"), loaders):
+        filenames = source.get(partition)
+        if not isinstance(filenames, list) or not all(isinstance(p, str) for p in filenames):
+            raise ValueError(f"Invalid source split order: {partition}")
+        names = [PurePosixPath(filename).name for filename in filenames]
+        dataset = loader.dataset
+        if len(dataset.img_paths) != len(dataset.label_paths):
+            raise ValueError(f"Image/label count mismatch: {partition}")
+        pairs = {
+            Path(image).name: (image, label)
+            for image, label in zip(dataset.img_paths, dataset.label_paths)
+        }
+        if (
+            len(pairs) != len(dataset.img_paths)
+            or len(names) != len(set(names))
+            or set(names) != set(pairs)
+        ):
+            raise ValueError(f"Source split membership differs from prepared data: {partition}")
+        plans.append((partition, dataset, [pairs[name] for name in names]))
+    actual = {}
+    for partition, dataset, pairs in plans:
+        dataset.img_paths = [image for image, _ in pairs]
+        dataset.label_paths = [label for _, label in pairs]
+        actual[partition] = [os.path.abspath(image) for image in dataset.img_paths]
+    return actual
+
+
+def install_source_split_order(namespace, manifest):
+    original = namespace["load_data"]
+
+    def load_data(config):
+        loaders = original(config)
+        actual = restore_source_split_order(loaders, manifest)
+        actual["seed"] = config.SEED
+        (Path(config.SAVE_DIR) / "training_split.json").write_text(
+            json.dumps(actual, indent=2), encoding="utf-8"
+        )
+        print("[Data] preserved source_split sample order before shuffling", flush=True)
+        return loaders
+
+    namespace["train_model"].__globals__["load_data"] = load_data
 
 
 def validate_onnx(namespace, config, output):
@@ -105,11 +159,13 @@ def validate_onnx(namespace, config, output):
             "name": "input",
             "shape": [1, 3, 128, 128],
             "dtype": "float32",
+            "onnx_type": inputs[0].type,
             "preprocess": "RGB, resize 128x128, NCHW, divide by 255",
         },
         "output": {
             "name": "output",
             "shape": [1, 11],
+            "onnx_type": outputs[0].type,
             "columns": [
                 "confidence",
                 "class0",
@@ -163,6 +219,9 @@ def main():
     weight = code / "pretrained/checkpoints" / metadata["pretrained_name"]
     if hashlib.sha256(trainer.read_bytes()).hexdigest() != metadata["trainer_sha256"]:
         raise ValueError("Original trainer checksum mismatch")
+    runner_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    if metadata.get("runner_sha256", runner_sha256) != runner_sha256:
+        raise ValueError("Platform runner checksum mismatch")
     if hashlib.sha256(weight.read_bytes()).hexdigest() != metadata["pretrained_sha256"]:
         raise ValueError("Pretrained weight checksum mismatch")
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -187,11 +246,19 @@ def main():
     torch.cuda.manual_seed_all(config.SEED)
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = args.data_root / "split_manifest.json"
+    data_order = "directory_sorted"
     if manifest.exists():
         (args.output / "split_manifest.json").write_bytes(manifest.read_bytes())
+        install_source_split_order(namespace, json.loads(manifest.read_text(encoding="utf-8")))
+        data_order = "source_split"
     with (args.output / "results.csv").open("w", newline="", encoding="utf-8") as metrics:
         logger = MetricLog(sys.stdout, metrics)
         with contextlib.redirect_stdout(logger):
+            print(
+                f"[config] epochs={config.EPOCHS}, batch_size={config.BATCH_SIZE}, "
+                f"num_classes={config.NUM_CLASSES}, seed={config.SEED}, data_order={data_order}",
+                flush=True,
+            )
             print("[stage] train: original trainer, fixed split, two point classes", flush=True)
             namespace["train_model"](config)
             print("[stage] export: original fixed-batch ONNX exporter", flush=True)
@@ -202,6 +269,10 @@ def main():
         "schema_version": 1,
         "parameters": vars(args),
         "integration": metadata,
+        "runner_sha256": runner_sha256,
+        "data_order": data_order,
+        "num_classes": config.NUM_CLASSES,
+        "seed": config.SEED,
         "best_epoch": checkpoint["epoch"],
         "best_val_loss": checkpoint["val_loss"],
         "completed_epochs": len(logger.epochs),
@@ -209,7 +280,9 @@ def main():
         "gpu": torch.cuda.get_device_name(0),
         "versions": {
             key: importlib.metadata.version(key)
-            for key in ("torch", "torchvision", "numpy", "onnx", "onnxruntime", "scikit-learn")
+            for key in (
+                "torch", "torchvision", "numpy", "onnx", "onnxruntime", "scikit-learn", "Pillow"
+            )
         },
     }
     (args.output / "run_summary.json").write_text(

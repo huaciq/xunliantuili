@@ -99,6 +99,8 @@ def prepare(source, output, weights):
     metadata = {
         "schema_version": 1,
         "trainer_sha256": sha256(trainer),
+        "runner_sha256": sha256(runner),
+        "data_order": "source_split",
         "pretrained_sha256": sha256(weights),
         "pretrained_name": WEIGHT_NAME,
         "historical_parameters": json.loads(

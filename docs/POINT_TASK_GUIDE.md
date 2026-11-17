@@ -6,13 +6,15 @@
 
 - 200 张图片，200 份同名 TXT；空 TXT 为背景，非空格式 `class_id x y`，坐标归一化到 0～1。
 - 背景 127 张，类别 0 为 41 张，类别 1 为 32 张；并非简单的好/坏标签。
-- 按历史清单固定 160 张训练、40 张验证，不重新随机拆分。
+- 按历史清单固定 160 张训练、40 张验证，并恢复清单中的样本读取顺序，不重新随机拆分。
 - 全主干训练、batch=16、lr=0.0003、分类损失权重=0.3、seed=42；先 1 轮验收，再 10 轮基线。
 - 保留算法的 ONNX 包装：置信度 sigmoid、两类概率 softmax，再补齐到 8 类概率，加上 x/y，总输出 11 维。
 
 适配不修改原始 `pointModel-batch1.py`。额外的 `platform_train.py` 导入该脚本的定义，设置挂载路径和参数，然后调用原 `train_model`、原 `export_onnx`，最后用 ONNX Runtime 核验真实输出。原算法的网络、损失、优化器、早停和导出处理均保留。
 
-本次环境基于平台 PyTorch 2.5.1/CUDA12.4、torchvision0.20.1，属于经本地验证的接入环境，不是历史说明中的 torch2.7.1/cu118 环境复刻。固定了数据成员不代表随机增强、训练结果与历史任务逐位相同；预先分目录后读取顺序也可能与原随机列表不同。输入预处理保留原脚本 RGB、128×128、除以255，不套用 ImageNet 标准化。
+本次环境基于平台 PyTorch 2.5.1/CUDA12.4、torchvision0.20.1，属于经本地验证的接入环境，不是历史说明中的 torch2.7.1/cu118 环境复刻。修复后的入口根据 `split_manifest.json` 中的 `source_split` 恢复训练和验证数据的原始索引；旧 v1 入口会按分目录文件名重新排序，即使 seed 相同也会改变训练批次。跨环境的随机增强、CUDA 算法和训练结果仍需实测。输入预处理保留原脚本 RGB、128×128、除以255，不套用 ImageNet 标准化。
+
+2026-11-17 的同参数对照实验、修复代码包和模型比较方法见 [点位模型差异排查](POINT_MODEL_INVESTIGATION_20261117.md)。已有的上传代码版本不会随 Git 更新，必须重新上传修复后的代码包，创建新任务。
 
 ## 2. 准备文件（Windows）
 
@@ -106,11 +108,11 @@ Docker 镜像还需在此 Linux 服务器实际构建和运行验收，本地 Wi
 | --- | --- |
 | `mobilenetv2_point_128.pth` | 原训练器保存的最佳 checkpoint，包含模型/优化器状态和训练信息 |
 | `dataset200_point.onnx` | 算法真实导出，输入 input[1,3,128,128]、输出 output[1,11]、opset11 |
-| `onnx_validation.json` | status=passed、samples=40、实际最大绝对误差和逐图输出 |
+| `onnx_validation.json` | status=passed、samples=40、实际最大绝对误差、输入输出 ONNX 类型和逐图输出 |
 | `results.csv` | 每轮 train/loss、val/loss；从原日志转录，精度为原打印的4位小数 |
 | `training_split.json` | 原算法实际使用的容器内绝对路径，可与清单对应 |
 | `split_manifest.json` | 源相对路径清单、原文件SHA及各划分的类别统计 |
-| `run_summary.json` | 实际参数、依赖版本、GPU、最佳轮次、验证结果及源代码/权重SHA |
+| `run_summary.json` | 实际参数、依赖版本、GPU、最佳轮次、验证结果、data_order 及源代码/入口/权重SHA |
 
 数值一致不代表生产精度达标。`val/loss` 是训练联合损失，不是准确率；当前没有独立 test 集或任务级业务精度报告。正样本定位误差、类别准确率、背景误报率需单独设计后续评估，不能由 ONNX 数值校验替代。
 
