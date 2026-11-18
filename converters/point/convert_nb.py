@@ -9,6 +9,7 @@ import uuid
 
 import onnx
 
+import hybrid_quantization
 from nb_validation import quality_limits, validate_nb_interface, validate_predictions
 from point_quantization import (
     RECIPE, clean_head, configure, keep_input_u8, prepare_images, split_images,
@@ -24,6 +25,15 @@ QEMU = EMULATION / "bin/qemu-x86_64-static"
 PEGASUS = "/usr/local/acuity_command_line_tools/pegasus.py"
 VIV_SDK = "/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools"
 TARGET = "VIP9000NANODI_PLUS_PID0X1000003B"
+
+
+def infer_validation(run_sdk, guest_work, count):
+    for dtype in ("float32", "quantized"):
+        quantize = ["--model-quantize", "model.quantize"] if dtype == "quantized" else []
+        run_sdk(guest_work, False, "inference", "--model", "model.json", "--model-data", "model.data",
+                "--device", "CPU", "--with-input-meta", "validation_input.yml",
+                "--postprocess-file", "post.yml", "--dtype", dtype, "--batch-size", "1",
+                "--iterations", str(count), "--output-dir", "sanity_" + dtype, *quantize)
 
 
 def within_root(path):
@@ -101,16 +111,24 @@ def main(onnx_path, dataset_path, nb_path, *, workspace_root=None, sdk_runner=No
                 "--device", "CPU", "--batch-size", "1", "--iterations", str(len(calibration)),
                 "--compute-entropy", "--rebuild")
     report["uint8_ports"] = keep_input_u8(work)
-    for dtype in ("float32", "quantized"):
-        quantize = ["--model-quantize", "model.quantize"] if dtype == "quantized" else []
-        run_sdk(guest_work, False, "inference", "--model", "model.json", "--model-data", "model.data",
-                    "--device", "CPU", "--with-input-meta", "validation_input.yml",
-                    "--postprocess-file", "post.yml",
-                    "--dtype", dtype, "--batch-size", "1", "--iterations", str(len(validation)),
-                    "--output-dir", "sanity_" + dtype, *quantize)
+    report["quantization_strategy"] = "perchannel_int8"
+    infer_validation(run_sdk, guest_work, len(validation))
     quality_report = work / "quality_validation.json"
     try:
-        report["quality_validation"] = validate_predictions(onnx_path, work, validation_records, limits)
+        try:
+            report["quality_validation"] = validate_predictions(onnx_path, work, validation_records, limits)
+        except ValueError:
+            if not hybrid_quantization.can_retry(work):
+                raise
+            print("INT8 validation failed; applying SDK recommended hybrid precision", flush=True)
+            report["hybrid_quantization"] = hybrid_quantization.apply(
+                work, guest_work, run_sdk, len(calibration)
+            )
+            configure(work, guest_work)
+            report["uint8_ports"] = keep_input_u8(work)
+            infer_validation(run_sdk, guest_work, len(validation))
+            report["quality_validation"] = validate_predictions(onnx_path, work, validation_records, limits)
+            report["quantization_strategy"] = "sdk_recommended_hybrid"
     except (OSError, ValueError) as exc:
         if not quality_report.is_file():
             quality_report.write_text(json.dumps({"status": "failed", "error": str(exc)}, indent=2),

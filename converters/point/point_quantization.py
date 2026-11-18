@@ -15,7 +15,7 @@ import yaml
 from sdk_point_entry import quantization_json
 
 
-RECIPE = "point-pcint8-rgb-u8-v2"
+RECIPE = "point-pcint8-rgb-u8-v3"
 
 
 def image_files(folder):

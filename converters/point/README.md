@@ -1,12 +1,16 @@
 # 点位 ONNX 转 NB
 
-这里保存平台使用的 AMD64 宿主转换源码。版本为 `point-pcint8-rgb-u8-v2`，通过原有三参数入口接收 ONNX、数据集目录和 NB 输出路径。
+这里保存平台使用的 AMD64 宿主转换源码。版本为 `point-pcint8-rgb-u8-v3`，通过原有三参数入口接收 ONNX、数据集目录和 NB 输出路径。
 
 校准和验证使用 Pillow 11.0.0 的 RGB 双线性缩放。`training_split.json` 与 ONNX 同目录，train 用于校准，val 用于逐图核对原 ONNX、SDK 浮点和 SDK INT8 的预测。SDK 输入张量、输出有限值和误差上限均通过后，再导出 NB 并检查实际二进制接口。
 
 NB 输入为 UINT8 NCHW `[1,3,128,128]`，scale 为 1/255，zero point 为 0。输出为 FLOAT16 `[1,11]`。默认逐图概率偏差上限为 0.10，定位偏差上限为 3 像素（按 128×128 输入计）。配置文件中的 `validation_limits.max_probability_delta` 和 `validation_limits.max_coordinate_delta_px` 可调整这些上限。
 
 完整逐图报告保存在 SDK 工作目录的 `quality_validation.json` 中。报告包括置信度过 0.5 的判断变化和类别变化。源码与本地回归已验证，真实 SDK 编译结果仍需在 Linux 转换服务器运行验收。
+
+当浮点校验通过、INT8 偏差超限，且 SDK 量化表给出 `customized_quantize_layers` 时，转换器执行一次 `--hybrid` 混合量化。SDK 可为建议的敏感层提高精度，并生成新的模型结构和量化数据。转换器使用新结构重新配置输入和输出，重新执行两种精度的验证，全部满足原有上限后才导出 NB。第一次的量化表、模型数据和逐图结果保存在 `baseline_int8/`，实际使用的混合精度策略写入 `hybrid_quantization.json` 和最终转换报告。
+
+混合量化遵循 [A733 厂商工具说明](https://docs.radxa.com/en/cubie/a7s/app-dev/npu-dev/cubie-quant-acc-improve)。本地测试覆盖 SDK 调用顺序、图和数据切换、报告保留及失败拦截。真实混合量化效果和目标板执行结果需要在转换服务器验证。
 
 ## 部署 zys 分支
 

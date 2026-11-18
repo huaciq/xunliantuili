@@ -15,7 +15,7 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 SOURCE = REPOSITORY / "converters" / "point"
 MODULES = (
     "convert_nb.py", "convert_nb_docker.py", "point_quantization.py",
-    "nb_validation.py", "sdk_point_entry.py", "sdk_container_watchdog.py",
+    "nb_validation.py", "hybrid_quantization.py", "sdk_point_entry.py", "sdk_container_watchdog.py",
 )
 
 
@@ -127,10 +127,10 @@ def deploy(args):
         subprocess.run([
             "sudo", "-u", args.user, str(python), "-B", "-c",
             "import json, convert_nb_docker, nb_validation, point_quantization, PIL; "
-            "assert point_quantization.RECIPE == 'point-pcint8-rgb-u8-v2'; "
+            "assert point_quantization.RECIPE == 'point-pcint8-rgb-u8-v3'; "
             "assert PIL.__version__ == '11.0.0'; "
             "nb_validation.quality_limits(json.load(open('config.json')).get('validation_limits', {})); "
-            "print('POINT_CONVERTER_V2_IMPORT_OK')",
+            "print('POINT_CONVERTER_V3_IMPORT_OK')",
         ], cwd=converter, check=True)
         with NamedTemporaryFile(mode="w", encoding="utf-8", dir=target, delete=False) as handle:
             staged_env = Path(handle.name)
