@@ -341,6 +341,36 @@ def test_rejects_calibration_dataset_from_another_project(conversion_project):
     assert response.json()["detail"] == "找不到该项目的数据集版本"
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "expected"),
+    [
+        (
+            "RuntimeError: NB quality validation failed: SDK INT8 quantization exceeds "
+            "error limits on 30/40 validation images; first: auto_144.jpg",
+            "INT8 量化精度校验未通过，40 张验证图中有 30 张超过转换误差上限。",
+        ),
+        (
+            "ValueError: SDK float import exceeds error limits on 2/40 validation images",
+            "SDK 浮点导入精度校验未通过，40 张验证图中有 2 张超过转换误差上限。",
+        ),
+        ("Unrecognized converter error", "模型转换失败，请联系管理员检查转换日志"),
+    ],
+)
+def test_conversion_failure_explains_quality_gate(conversion_project, monkeypatch, diagnostic, expected):
+    script = "import sys; print(sys.argv[1], file=sys.stderr); sys.exit(1)"
+    monkeypatch.setattr(settings, "nb_converter_command", [PYTHON, "-c", script, diagnostic])
+    client, headers, path, form = conversion_project
+    response = client.post(
+        path, headers=headers, data=form, files={"file": ("model.onnx", b"onnx-input")},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith(expected)
+    # Failure must release the shared slot so another attempt can reach the converter.
+    assert client.post(
+        path, headers=headers, data=form, files={"file": ("model.onnx", b"onnx-input")},
+    ).status_code == 422
+
+
 def test_timed_out_conversion_cleans_up_and_can_retry(conversion_project, monkeypatch):
     monkeypatch.setattr(settings, "nb_conversion_timeout_seconds", 1)
     monkeypatch.setattr(

@@ -20,6 +20,7 @@ const metrics = ref<MetricPoint[]>([])
 const artifacts = ref<RunArtifact[]>([])
 const conversionProject = ref<Project | null>(null)
 const convertingId = ref<string | null>(null)
+const nbFailure = ref('')
 const nbResult = shallowRef<{ artifactId: string; file: Blob; name: string } | null>(null)
 const loading = ref(false)
 const registering = ref(false)
@@ -118,6 +119,7 @@ async function convertToNb(artifact: RunArtifact) {
   const currentRun = run.value
   if (!currentRun || convertingId.value || nbConversionStatus.value !== 'ready' || !convertibleArtifactIds.value.has(artifact.id)) return
   convertingId.value = artifact.id
+  nbFailure.value = ''
   try {
     const response = await api.post<Blob>(
       `/runs/${currentRun.id}/artifacts/${artifact.id}/conversions/onnx-to-nb`,
@@ -128,7 +130,7 @@ async function convertToNb(artifact: RunArtifact) {
     const stem = Array.from(basename.slice(0, -5)).slice(0, 200).join('')
     nbResult.value = { artifactId: artifact.id, file: response.data, name: `${stem}.nb` }
   } catch (error) {
-    message.error(await conversionError(error))
+    nbFailure.value = await conversionError(error)
   } finally {
     convertingId.value = null
   }
@@ -226,6 +228,9 @@ onBeforeUnmount(() => {
           <header class="section-header"><div><h2>训练产物</h2><p>checkpoint、指标报告和模型导出文件。</p></div><FileBox :size="20" /></header>
           <NAlert v-if="convertibleArtifactIds.size && nbConversionStatus === 'unconfigured'" type="warning" class="conversion-notice">
             服务器尚未配置 NB 转换器。
+          </NAlert>
+          <NAlert v-if="nbFailure" type="error" class="conversion-notice" title="NB 转换失败">
+            {{ nbFailure }}
           </NAlert>
           <div class="artifact-list">
             <div v-for="artifact in artifacts" :key="artifact.id" class="artifact-row">

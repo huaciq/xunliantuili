@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 from contextlib import suppress
@@ -185,7 +186,20 @@ def convert_to_nb(source: Path, dataset: Path, output_dir: Path) -> Path:
             log.seek(max(0, log_path.stat().st_size - 4096))
             diagnostic = log.read(4096).decode("utf-8", errors="replace").strip()
         logger.warning("NB converter exited with code %d: %s", exit_code, diagnostic)
-        raise HTTPException(status_code=422, detail="模型转换失败，请联系管理员检查转换日志")
+        match = re.search(
+            r"SDK (INT8 quantization|float import) exceeds error limits "
+            r"on (\d+)/(\d+) validation images",
+            diagnostic,
+        )
+        if match:
+            stage = "INT8 量化" if match[1] == "INT8 quantization" else "SDK 浮点导入"
+            detail = (
+                f"{stage}精度校验未通过，{match[3]} 张验证图中有 {match[2]} 张超过转换误差上限。"
+                "请查看服务器转换工作目录中的 quality_validation.json。"
+            )
+        else:
+            detail = "模型转换失败，请联系管理员检查转换日志"
+        raise HTTPException(status_code=422, detail=detail)
 
     if output_dir.is_symlink() or output.is_symlink() or not output.is_file():
         raise HTTPException(status_code=422, detail="转换器未生成有效的 NB 文件")
