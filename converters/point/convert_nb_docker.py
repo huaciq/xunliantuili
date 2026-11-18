@@ -36,7 +36,7 @@ def main(*args):
                                     str(os.getpid()), identity, container_name],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, start_new_session=True)
-        command = ["sudo", "-n", "docker", "run", "--rm", "--name", container_name,
+        command = ["docker", "run", "--rm", "--name", container_name,
                    "--label", "glh.training.sdk=true", "--network", "none",
                    *(["--cgroup-parent", settings["sdk_cgroup_parent"]]
                      if settings.get("sdk_cgroup_parent") else []),

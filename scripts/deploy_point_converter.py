@@ -80,7 +80,8 @@ def deploy(args):
         config.pop("sdk_workspace", None)
     image = config.get("sdk_image", "ubuntu-npu:v2.0.10.2")
     subprocess.run(["docker", "image", "inspect", image], check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["sudo", "-u", args.user, "sudo", "-n", "docker", "image", "inspect", image],
+    # The API service grants Docker access through SupplementaryGroups=docker.
+    subprocess.run(["sudo", "-u", args.user, "-g", "docker", "--", "docker", "image", "inspect", image],
                    check=True, stdout=subprocess.DEVNULL)
 
     target.mkdir(parents=True, exist_ok=True)

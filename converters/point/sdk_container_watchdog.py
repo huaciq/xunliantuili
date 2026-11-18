@@ -12,7 +12,7 @@ while True:
     except FileNotFoundError:
         current = None
     if current != identity:
-        subprocess.run(['sudo', '-n', 'docker', 'rm', '-f', name],
+        subprocess.run(['docker', 'rm', '-f', name],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         break
     time.sleep(1)
