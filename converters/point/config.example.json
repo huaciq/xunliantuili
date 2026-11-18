@@ -1,0 +1,6 @@
+{
+  "sdk_image": "ubuntu-npu:v2.0.10.2",
+  "sdk_memory": "7g",
+  "sdk_cpus": 2,
+  "sdk_cgroup_parent": ""
+}
