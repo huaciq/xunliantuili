@@ -6,16 +6,16 @@ import hashlib
 import json
 from pathlib import Path
 
+import cv2
 import numpy as np
 import onnx
 from onnx import helper, numpy_helper
 import onnxruntime as ort
-from PIL import Image
 import yaml
 from sdk_point_entry import quantization_json
 
 
-RECIPE = "point-pcint8-rgb-u8-v3"
+RECIPE = "point-pcint8-rgb-u8-v1"
 
 
 def image_files(folder):
@@ -23,36 +23,19 @@ def image_files(folder):
                   if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp"))
 
 
-def split_images(onnx_path, dataset):
-    """Read the separate calibration and quality-check partitions."""
+def calibration_images(onnx_path, dataset):
+    """Require the exact split recorded by the trainer, never calibrate on val."""
     manifest = Path(onnx_path).parent / "training_split.json"
     split = json.loads(manifest.read_text(encoding="utf-8"))
     root = Path(dataset).resolve()
-    partitions = []
-    for key in ("train", "val"):
-        paths = split.get(key)
-        if not isinstance(paths, list) or not paths or any(not isinstance(p, str) for p in paths):
-            raise ValueError(f"Expected a nonempty {key} image list")
-        files = sorted(Path(p).resolve() for p in paths)
-        if len(files) != len(set(files)):
-            raise ValueError(f"Duplicate image in {key} split")
-        for path in files:
-            if root not in path.parents or not path.is_file():
-                raise ValueError(f"{key} image must exist inside the task dataset: {path}")
-        partitions.append(files)
-    train, validation = partitions
-    if set(train) & set(validation):
-        raise ValueError("Overlapping training and validation images")
-    return train, validation
-
-
-def calibration_images(onnx_path, dataset):
-    return split_images(onnx_path, dataset)[0]
-
-
-def resize_rgb(path):
-    with Image.open(path) as image:
-        return image.convert("RGB").resize((128, 128), Image.Resampling.BILINEAR)
+    files = [Path(p).resolve() for p in split["train"]]
+    validation = {Path(p).resolve() for p in split["val"]}
+    if not files or len(files) != len(set(files)) or set(files) & validation:
+        raise ValueError("Invalid or overlapping training/calibration split")
+    for path in files:
+        if root not in path.parents or not path.is_file():
+            raise ValueError("Calibration image must exist inside the task dataset")
+    return sorted(files)
 
 
 def clean_head(source, destination):
@@ -138,20 +121,25 @@ def clean_head(source, destination):
     return {"rewired_slices": len(replacements), "nodes": len(kept)}
 
 
-def prepare_images(files, work, guest_work, *, validation=False):
-    partition = "validation" if validation else "calibration"
-    folder = work / f"{partition}128"
+def prepare_images(files, work, guest_work):
+    folder = work / "calibration128"
     folder.mkdir()
     records, names = [], []
     for i, path in enumerate(files):
+        data = path.read_bytes()
+        image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("Cannot decode calibration image: " + str(path))
+        image = cv2.resize(image, (128, 128), interpolation=cv2.INTER_LINEAR)
+        ok, png = cv2.imencode(".png", image)
+        if not ok:
+            raise ValueError("Cannot encode calibration PNG")
         name = f"{i:05d}.png"
-        resize_rgb(path).save(folder / name)
-        names.append(str(guest_work / folder.name / name))
-        records.append({"source": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "png": name})
-    database = "validation.txt" if validation else "dataset.txt"
-    (work / database).write_text("".join(n + "\n" for n in names), encoding="utf-8")
-    (work / f"{partition}_manifest.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
-    return records
+        (folder / name).write_bytes(png.tobytes())
+        names.append(str(guest_work / "calibration128" / name))
+        records.append({"source": str(path), "sha256": hashlib.sha256(data).hexdigest(), "png": name})
+    (work / "dataset.txt").write_text("".join(n + "\n" for n in names), encoding="utf-8")
+    (work / "calibration_manifest.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
 
 
 def verify_equivalence(source, cleaned, files):
@@ -162,7 +150,11 @@ def verify_equivalence(source, cleaned, files):
                 for p in (source, cleaned)]
     maximum = 0.0
     for path in files:
-        value = np.asarray(resize_rgb(path), dtype=np.float32).transpose(2, 0, 1)[None] / 255
+        image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("Cannot decode equivalence image: " + str(path))
+        image = cv2.resize(image, (128, 128), interpolation=cv2.INTER_LINEAR)
+        value = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).transpose(2, 0, 1)[None].astype(np.float32) / 255
         a, b = [s.run(None, {s.get_inputs()[0].name: value})[0] for s in sessions]
         if a.shape != (1, 11) or b.shape != (1, 11) or not np.isfinite(a).all() or not np.isfinite(b).all():
             raise ValueError("Nonfinite or incompatible point output")
@@ -188,10 +180,8 @@ def configure(work, guest_work):
     meta = dict(input_meta=dict(databases=[dict(path=str(guest_work / "dataset.txt"), type="TEXT", ports=[port])]))
     post = dict(postprocess=dict(acuity_postprocs=dict(dump_results=dict(file_type="TENSOR")),
                 app_postprocs=[dict(lid=outputs[0], postproc_params=dict(add_postproc_node=False,
-                perm=[0, 1], force_float32=False))]))
+                perm=[0, 1], force_float32=True))]))
     (work / "input.yml").write_text(yaml.safe_dump(meta, sort_keys=False))
-    meta["input_meta"]["databases"][0]["path"] = str(guest_work / "validation.txt")
-    (work / "validation_input.yml").write_text(yaml.safe_dump(meta, sort_keys=False))
     (work / "post.yml").write_text(yaml.safe_dump(post, sort_keys=False))
 
 

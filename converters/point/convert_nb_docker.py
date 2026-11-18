@@ -72,8 +72,7 @@ def main(*args):
                                started_at=wall_started, finished_at=time.time(), container=container_name))
             timing.write_text(json.dumps(stages, indent=2))
 
-    converter.main(*args, workspace_root=staging, sdk_runner=run_native,
-                   validation_settings=settings.get("validation_limits"))
+    converter.main(*args, workspace_root=staging, sdk_runner=run_native)
 
 
 if __name__ == "__main__":

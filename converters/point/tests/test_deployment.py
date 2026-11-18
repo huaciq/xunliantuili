@@ -40,16 +40,21 @@ def test_deployment_selects_new_version_only_after_successful_import(tmp_path, m
     modules = target / "converter"
     modules.mkdir(parents=True)
     (modules / "convert_nb.py").write_text("old version\n")
+    for name in installer.RETIRED_MODULES:
+        (modules / name).write_text("previous added module\n")
     env_file = tmp_path / "platform.env"
     env_file.write_text("NB_CONVERTER_WORKDIR=/opt/old\nAPP_SECRET_KEY=retain\n")
     original = env_file.read_bytes()
     owner = SimpleNamespace(pw_uid=1000, pw_gid=1000)
     monkeypatch.setitem(sys.modules, "pwd", SimpleNamespace(getpwnam=lambda name: owner))
     monkeypatch.setattr(installer.os, "chown", lambda *args: None, raising=False)
+    real_run = subprocess.run
 
     def execute(argv, **kwargs):
-        if import_failure and "-B" in argv:
-            raise subprocess.CalledProcessError(1, argv)
+        if "-B" in argv:
+            if import_failure:
+                raise subprocess.CalledProcessError(1, argv)
+            return real_run([sys.executable, "-B", "-c", argv[-1]], **kwargs)
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(installer.subprocess, "run", execute)
@@ -60,9 +65,12 @@ def test_deployment_selects_new_version_only_after_successful_import(tmp_path, m
             installer.deploy(args)
         assert env_file.read_bytes() == original
         assert (modules / "convert_nb.py").read_text() == "old version\n"
-        assert not (modules / "nb_validation.py").exists()
+        assert all((modules / name).read_text() == "previous added module\n"
+                   for name in installer.RETIRED_MODULES)
+        assert not (modules / "original_source.json").exists()
     else:
         installer.deploy(args)
         assert 'APP_SECRET_KEY=retain' in env_file.read_text()
         assert str(target).replace('\\', '\\\\') in env_file.read_text()
-        assert (modules / "nb_validation.py").is_file()
+        assert (modules / "original_source.json").is_file()
+        assert not any((modules / name).exists() for name in installer.RETIRED_MODULES)

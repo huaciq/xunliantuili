@@ -1,4 +1,4 @@
-"""Convert server point models and validate numerics before publishing NB."""
+"""Convert server point models with the verified RGB / per-channel INT8 recipe."""
 import hashlib
 import json
 from pathlib import Path
@@ -9,12 +9,8 @@ import uuid
 
 import onnx
 
-import hybrid_quantization
-from nb_validation import quality_limits, validate_nb_interface, validate_predictions
-from point_quantization import (
-    RECIPE, clean_head, configure, keep_input_u8, prepare_images, split_images,
-    verify_equivalence,
-)
+from point_quantization import (RECIPE, calibration_images, clean_head, configure,
+                              keep_input_u8, prepare_images, verify_equivalence)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -25,15 +21,6 @@ QEMU = EMULATION / "bin/qemu-x86_64-static"
 PEGASUS = "/usr/local/acuity_command_line_tools/pegasus.py"
 VIV_SDK = "/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools"
 TARGET = "VIP9000NANODI_PLUS_PID0X1000003B"
-
-
-def infer_validation(run_sdk, guest_work, count):
-    for dtype in ("float32", "quantized"):
-        quantize = ["--model-quantize", "model.quantize"] if dtype == "quantized" else []
-        run_sdk(guest_work, False, "inference", "--model", "model.json", "--model-data", "model.data",
-                "--device", "CPU", "--with-input-meta", "validation_input.yml",
-                "--postprocess-file", "post.yml", "--dtype", dtype, "--batch-size", "1",
-                "--iterations", str(count), "--output-dir", "sanity_" + dtype, *quantize)
 
 
 def within_root(path):
@@ -65,8 +52,7 @@ def run_pegasus(guest_work, export, *args):
     subprocess.run(command, env=env, check=True)
 
 
-def main(onnx_path, dataset_path, nb_path, *, workspace_root=None, sdk_runner=None,
-         validation_settings=None):
+def main(onnx_path, dataset_path, nb_path, *, workspace_root=None, sdk_runner=None):
     onnx_path = within_root(onnx_path)
     dataset_path = within_root(dataset_path)
     nb_path = within_root(nb_path)
@@ -74,8 +60,7 @@ def main(onnx_path, dataset_path, nb_path, *, workspace_root=None, sdk_runner=No
         raise FileNotFoundError("ONNX model or isolated converter is missing")
     if nb_path.exists():
         raise FileExistsError("Refusing to replace an existing model artifact")
-    calibration, validation = split_images(onnx_path, dataset_path)
-    limits = quality_limits({} if validation_settings is None else validation_settings)
+    files = calibration_images(onnx_path, dataset_path)
     task_id = hashlib.sha256(str(nb_path).encode()).hexdigest()[:16] + "-" + uuid.uuid4().hex[:12]
     guest_work = Path("/workspace/training/converter-jobs") / task_id
     # SDK storage is selected by the trusted deployment backend. Model, dataset
@@ -85,18 +70,15 @@ def main(onnx_path, dataset_path, nb_path, *, workspace_root=None, sdk_runner=No
     work = backend_root / guest_work.relative_to("/")
     work.mkdir(parents=True, exist_ok=False)
     shutil.copy2(ROOT / "sdk_point_entry.py", work / "sdk_point_entry.py")
-    report = {"recipe": RECIPE, "workspace": str(guest_work), "host_workspace": str(work),
-              "calibration_count": len(calibration), "validation_count": len(validation),
-              "image_preprocess": "Pillow RGB bilinear to 128x128",
+    report = {"recipe": RECIPE, "workspace": str(guest_work), "host_workspace": str(work), "calibration_count": len(files),
               "quantizer": "perchannel_symmetric_affine", "qtype": "int8",
               "quantization_table_io": "json-yaml-subset",
               "input": {"shape": [1, 3, 128, 128], "qtype": "u8", "scale": 1 / 255, "zero_point": 0},
               "source_onnx_sha256": hashlib.sha256(onnx_path.read_bytes()).hexdigest()}
     cleaned = work / "model.onnx"
     report["head"] = clean_head(onnx_path, cleaned)
-    report["equivalence"] = verify_equivalence(onnx_path, cleaned, calibration + validation)
-    prepare_images(calibration, work, guest_work)
-    validation_records = prepare_images(validation, work, guest_work, validation=True)
+    report["equivalence"] = verify_equivalence(onnx_path, cleaned, files)
+    prepare_images(files, work, guest_work)
     print(json.dumps(report, indent=2), flush=True)
     model = onnx.load(str(cleaned))
     run_sdk(guest_work, False, "import", "onnx", "--model", "model.onnx",
@@ -108,32 +90,15 @@ def main(onnx_path, dataset_path, nb_path, *, workspace_root=None, sdk_runner=No
     run_sdk(guest_work, False, "quantize", "--model", "model.json", "--model-data", "model.data",
                 "--with-input-meta", "input.yml", "--model-quantize", "model.quantize",
                 "--quantizer", "perchannel_symmetric_affine", "--qtype", "int8",
-                "--device", "CPU", "--batch-size", "1", "--iterations", str(len(calibration)),
+                "--device", "CPU", "--batch-size", "1", "--iterations", str(len(files)),
                 "--compute-entropy", "--rebuild")
     report["uint8_ports"] = keep_input_u8(work)
-    report["quantization_strategy"] = "perchannel_int8"
-    infer_validation(run_sdk, guest_work, len(validation))
-    quality_report = work / "quality_validation.json"
-    try:
-        try:
-            report["quality_validation"] = validate_predictions(onnx_path, work, validation_records, limits)
-        except ValueError:
-            if not hybrid_quantization.can_retry(work):
-                raise
-            print("INT8 validation failed; applying SDK recommended hybrid precision", flush=True)
-            report["hybrid_quantization"] = hybrid_quantization.apply(
-                work, guest_work, run_sdk, len(calibration)
-            )
-            configure(work, guest_work)
-            report["uint8_ports"] = keep_input_u8(work)
-            infer_validation(run_sdk, guest_work, len(validation))
-            report["quality_validation"] = validate_predictions(onnx_path, work, validation_records, limits)
-            report["quantization_strategy"] = "sdk_recommended_hybrid"
-    except (OSError, ValueError) as exc:
-        if not quality_report.is_file():
-            quality_report.write_text(json.dumps({"status": "failed", "error": str(exc)}, indent=2),
-                                      encoding="utf-8")
-        raise RuntimeError(f"NB quality validation failed: {exc}; details: {quality_report}") from exc
+    for dtype in ("float32", "quantized"):
+        quantize = ["--model-quantize", "model.quantize"] if dtype == "quantized" else []
+        run_sdk(guest_work, False, "inference", "--model", "model.json", "--model-data", "model.data",
+                    "--device", "CPU", "--with-input-meta", "input.yml", "--postprocess-file", "post.yml",
+                    "--dtype", dtype, "--batch-size", "1", "--iterations", "1",
+                    "--output-dir", "sanity_" + dtype, *quantize)
     run_sdk(guest_work, True, "export", "ovxlib", "--model", "model.json", "--model-data", "model.data",
                 "--dtype", "quantized", "--model-quantize", "model.quantize",
                 "--target-ide-project", "linux64", "--with-input-meta", "input.yml",
@@ -143,18 +108,23 @@ def main(onnx_path, dataset_path, nb_path, *, workspace_root=None, sdk_runner=No
     if not binary.is_file() or binary.stat().st_size < 1024:
         raise RuntimeError("ACUITY did not produce a nonempty packed NB model")
     report.update(nb_size=binary.stat().st_size, nb_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+    for name in ("calibration_manifest.json", "input.yml", "post.yml", "model.quantize"):
+        shutil.copy2(work / name, nb_path.parent / name)
     metadata = list(work.rglob("nbg_meta.json"))
     if len(metadata) != 1:
         raise RuntimeError("Expected exactly one exported NB metadata file")
     meta = json.loads(metadata[0].read_text())
-    report["compiled_nb_interface"] = validate_nb_interface(binary, meta)
+    inputs, outputs = list(meta["Inputs"].values()), list(meta["Outputs"].values())
+    if len(inputs) != 1 or len(outputs) != 1:
+        raise RuntimeError("Exported NB must have exactly one input/output")
+    quant = inputs[0]["quantize"]
+    if (inputs[0]["shape"] != [1, 3, 128, 128] or quant["qtype"] != "u8"
+            or abs(quant["scale"] - 1 / 255) > 1e-8 or quant["zero_point"] != 0
+            or outputs[0]["shape"] != [1, 11]):
+        raise RuntimeError("Exported NB interface does not match the board")
     report["exported_metadata"] = meta
-    (work / "conversion_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    for name in ("calibration_manifest.json", "validation_manifest.json", "input.yml",
-                 "validation_input.yml", "post.yml", "model.quantize",
-                 "quality_validation.json", "conversion_report.json"):
-        shutil.copy2(work / name, nb_path.parent / name)
     shutil.copy2(metadata[0], nb_path.parent / "nbg_meta.json")
+    (nb_path.parent / "conversion_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     temporary = nb_path.with_suffix(".nb.tmp")
     shutil.copy2(binary, temporary)
     temporary.replace(nb_path)

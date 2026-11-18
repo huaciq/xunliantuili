@@ -1,4 +1,4 @@
-"""Install the checked point converter and select it for one platform instance."""
+"""Install the original point converter for one platform instance."""
 
 import argparse
 from datetime import datetime, timezone
@@ -15,8 +15,9 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 SOURCE = REPOSITORY / "converters" / "point"
 MODULES = (
     "convert_nb.py", "convert_nb_docker.py", "point_quantization.py",
-    "nb_validation.py", "hybrid_quantization.py", "sdk_point_entry.py", "sdk_container_watchdog.py",
+    "sdk_point_entry.py", "sdk_container_watchdog.py",
 )
+RETIRED_MODULES = ("nb_validation.py", "hybrid_quantization.py")
 
 
 def replace_file(source, destination):
@@ -93,11 +94,9 @@ def deploy(args):
         if creator is None:
             creator = str(seed / "converter" / ".venv" / "bin" / "python")
         subprocess.run([creator, "-m", "venv", str(converter / ".venv")], check=True)
-    # The seed package contains the original offline dependencies, and Git supplies Pillow.
+    # Reuse the original package's offline dependencies without adding new ones.
     install = [str(python), "-m", "pip", "install", "--no-index",
-               "--find-links", str(SOURCE / "wheelhouse")]
-    if (seed / "wheelhouse").is_dir():
-        install.extend(["--find-links", str(seed / "wheelhouse")])
+               "--find-links", str(seed / "wheelhouse")]
     subprocess.run([*install, "-r", str(SOURCE / "requirements.txt")], check=True)
     subprocess.run([str(python), "-m", "pip", "check"], check=True)
 
@@ -106,8 +105,10 @@ def deploy(args):
     backup.mkdir(parents=True, mode=0o700)
     installed = []
     destinations = [(SOURCE / name, converter / name) for name in MODULES]
+    destinations.append((SOURCE / "original_source.json", converter / "original_source.json"))
     destinations.append((SOURCE / "convert.sh", target / "convert.sh"))
-    for _, destination in destinations:
+    retired = [converter / name for name in RETIRED_MODULES]
+    for destination in [*(destination for _, destination in destinations), *retired]:
         if destination.exists():
             shutil.copy2(destination, backup / destination.name)
     shutil.copy2(env_file, backup / "platform.env")
@@ -115,6 +116,10 @@ def deploy(args):
         for source, destination in destinations:
             replace_file(source, destination)
             installed.append(destination)
+        for destination in retired:
+            if destination.is_file():
+                destination.unlink()
+                installed.append(destination)
         if not config_path.exists():
             config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
             config_path.chmod(0o644)
@@ -126,11 +131,13 @@ def deploy(args):
         # Import from the installed location using the actual API account.
         subprocess.run([
             "sudo", "-u", args.user, str(python), "-B", "-c",
-            "import json, convert_nb_docker, nb_validation, point_quantization, PIL; "
-            "assert point_quantization.RECIPE == 'point-pcint8-rgb-u8-v3'; "
-            "assert PIL.__version__ == '11.0.0'; "
-            "nb_validation.quality_limits(json.load(open('config.json')).get('validation_limits', {})); "
-            "print('POINT_CONVERTER_V3_IMPORT_OK')",
+            "import hashlib, json; from pathlib import Path; "
+            "import convert_nb_docker, point_quantization, cv2; "
+            "assert point_quantization.RECIPE == 'point-pcint8-rgb-u8-v1'; "
+            "manifest = json.load(open('original_source.json')); "
+            "assert all(hashlib.sha256(Path(row['file']).read_bytes()).hexdigest() "
+            "== row['platform_sha256'] for row in manifest['files']); "
+            "print('POINT_CONVERTER_ORIGINAL_IMPORT_OK')",
         ], cwd=converter, check=True)
         with NamedTemporaryFile(mode="w", encoding="utf-8", dir=target, delete=False) as handle:
             staged_env = Path(handle.name)

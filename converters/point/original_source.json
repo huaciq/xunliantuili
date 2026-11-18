@@ -1,0 +1,37 @@
+{
+  "source_package": "amd64_conversion_only_20261112",
+  "recipe": "point-pcint8-rgb-u8-v1",
+  "restored_from": "Unmodified backup verified against the original package SHA256SUMS.txt",
+  "files": [
+    {
+      "file": "convert_nb.py",
+      "original_sha256": "6e1f1bcb1353f93bda1f22a7184db3a3934017b3131f55f10d79fc4630d60fdc",
+      "platform_sha256": "6e1f1bcb1353f93bda1f22a7184db3a3934017b3131f55f10d79fc4630d60fdc",
+      "adaptation": null
+    },
+    {
+      "file": "point_quantization.py",
+      "original_sha256": "a043e603e5839af195d3bc49fad65a0d074895b826fd8edb5658332af0613024",
+      "platform_sha256": "a043e603e5839af195d3bc49fad65a0d074895b826fd8edb5658332af0613024",
+      "adaptation": null
+    },
+    {
+      "file": "sdk_point_entry.py",
+      "original_sha256": "ddca02bf088735b7f6e8061fc2e19457affafa1a083bc89d2a8d5d19b479cef2",
+      "platform_sha256": "ddca02bf088735b7f6e8061fc2e19457affafa1a083bc89d2a8d5d19b479cef2",
+      "adaptation": null
+    },
+    {
+      "file": "convert_nb_docker.py",
+      "original_sha256": "00ed35e4e4b9215aec77b9b6eeff2b9ec7276a3c2e23bc48bd005e1766be9590",
+      "platform_sha256": "18680dfee77ad53cbfd2260eff468cb081510002b258318dc7ce3a758444fdfd",
+      "adaptation": "Use the API service Docker group instead of passwordless sudo."
+    },
+    {
+      "file": "sdk_container_watchdog.py",
+      "original_sha256": "9ce4b6ee4154c07cb48db3f7f4e67677689bd9e80646027948326b2843955e14",
+      "platform_sha256": "c10e04312310dbe6caf8a19242811b234ba94e2e5a3204c72b5c57888ac5dd1a",
+      "adaptation": "Use the API service Docker group for container cleanup."
+    }
+  ]
+}
