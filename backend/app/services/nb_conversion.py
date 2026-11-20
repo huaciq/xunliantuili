@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import subprocess
+import time
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from shutil import copyfile
@@ -15,6 +16,7 @@ from fastapi import HTTPException
 
 from app.config import GLH_CONVERTER_COMMAND, settings
 from app.models import Project, ProjectType
+from app.services.nb_conversion_progress import ConversionLogProgress, ConversionProgress
 
 logger = logging.getLogger(__name__)
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -152,7 +154,29 @@ def _stop_converter(process: subprocess.Popen) -> None:
         process.wait()
 
 
-def convert_to_nb(source: Path, dataset: Path, output_dir: Path) -> Path:
+def _wait_with_progress(
+    process: subprocess.Popen, log_path: Path, progress: ConversionProgress,
+) -> int:
+    deadline = time.monotonic() + settings.nb_conversion_timeout_seconds
+    observer = ConversionLogProgress(log_path, progress)
+    while True:
+        observer.refresh()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if process.poll() is not None:
+                return process.returncode
+            raise subprocess.TimeoutExpired(process.args, settings.nb_conversion_timeout_seconds)
+        try:
+            code = process.wait(timeout=min(0.5, remaining))
+        except subprocess.TimeoutExpired:
+            continue
+        observer.refresh()
+        return code
+
+
+def convert_to_nb(
+    source: Path, dataset: Path, output_dir: Path, *, progress: ConversionProgress | None = None
+) -> Path:
     output = output_dir / "result.nb"
     argv = [
         arg.replace("{input}", str(source))
@@ -162,6 +186,8 @@ def convert_to_nb(source: Path, dataset: Path, output_dir: Path) -> Path:
         for arg in settings.nb_converter_command
     ]
     log_path = source.parent / "converter.log"
+    if progress:
+        progress.update(10, "preparing_model", "预处理图片并检查模型")
     try:
         with log_path.open("wb") as log, subprocess.Popen(
             argv,
@@ -173,7 +199,10 @@ def convert_to_nb(source: Path, dataset: Path, output_dir: Path) -> Path:
             start_new_session=os.name == "posix",
         ) as process:
             try:
-                exit_code = process.wait(timeout=settings.nb_conversion_timeout_seconds)
+                if progress:
+                    exit_code = _wait_with_progress(process, log_path, progress)
+                else:
+                    exit_code = process.wait(timeout=settings.nb_conversion_timeout_seconds)
             except subprocess.TimeoutExpired as exc:
                 _stop_converter(process)
                 raise HTTPException(status_code=504, detail="模型转换超时，请重试") from exc
@@ -201,6 +230,8 @@ def convert_to_nb(source: Path, dataset: Path, output_dir: Path) -> Path:
             detail = "模型转换失败，请联系管理员检查转换日志"
         raise HTTPException(status_code=422, detail=detail)
 
+    if progress:
+        progress.update(95, "checking_output", "检查 NB 文件")
     if output_dir.is_symlink() or output.is_symlink() or not output.is_file():
         raise HTTPException(status_code=422, detail="转换器未生成有效的 NB 文件")
     size = output.stat().st_size

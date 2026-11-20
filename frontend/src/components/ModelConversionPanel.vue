@@ -5,8 +5,10 @@ import { NAlert, NButton, NFormItem, NSelect } from 'naive-ui'
 import { computed, ref, shallowRef, watch } from 'vue'
 
 import api, { errorMessage } from '../api'
+import { useNbConversionProgress } from '../composables/useNbConversionProgress'
 import { useAuthStore } from '../stores/auth'
 import type { Dataset, Project } from '../types'
+import NbConversionProgress from './NbConversionProgress.vue'
 
 const props = defineProps<{ project: Project; datasets: Dataset[] }>()
 const auth = useAuthStore()
@@ -27,6 +29,10 @@ const selectedFile = shallowRef<File | null>(null)
 const result = shallowRef<{ file: Blob; name: string } | null>(null)
 const converting = ref(false)
 const failure = ref('')
+const {
+  progress: nbProgress, warning: nbProgressWarning, elapsedSeconds: nbElapsedSeconds,
+  start: startNbProgress, succeed: finishNbProgress, fail: failNbProgress, reset: resetNbProgress,
+} = useNbConversionProgress()
 
 watch(datasetOptions, (options) => {
   if (options.some((option) => option.value === datasetVersionId.value)) return
@@ -36,6 +42,7 @@ watch(datasetOptions, (options) => {
 watch(datasetVersionId, () => {
   result.value = null
   failure.value = ''
+  if (!converting.value) resetNbProgress()
 })
 
 function selectFile(event: Event) {
@@ -46,6 +53,7 @@ function selectFile(event: Event) {
   result.value = null
   selectedFile.value = null
   failure.value = ''
+  resetNbProgress()
   if (!/\.onnx$/i.test(file.name) || !file.size) {
     failure.value = '请选择非空的 .onnx 文件。'
     return
@@ -79,14 +87,17 @@ async function convert() {
     data.append('dataset_version_id', datasetVersionId.value)
   }
   try {
+    const conversionId = startNbProgress(props.project.id)
     const response = await api.post<Blob>(
       `/projects/${props.project.id}/conversions/onnx-to-nb`, data,
-      { responseType: 'blob', timeout: 0 },
+      { responseType: 'blob', timeout: 0, headers: { 'X-NB-Conversion-ID': conversionId } },
     )
     const stem = Array.from(file.name.slice(0, -5)).slice(0, 200).join('')
     result.value = { file: response.data, name: `${stem}.nb` }
+    finishNbProgress()
   } catch (error) {
     failure.value = await conversionError(error)
+    failNbProgress(failure.value)
   } finally {
     converting.value = false
   }
@@ -132,6 +143,7 @@ function download() {
         </NButton>
         <span v-if="selectedFile" class="conversion-filename">{{ selectedFile.name }}</span>
       </div>
+      <NbConversionProgress :progress="nbProgress" :elapsed-seconds="nbElapsedSeconds" :warning="nbProgressWarning" />
       <NAlert v-if="failure" type="error" class="conversion-feedback">{{ failure }}</NAlert>
       <div v-if="result" class="conversion-actions conversion-feedback" role="status">
         <NButton type="success" secondary @click="download">

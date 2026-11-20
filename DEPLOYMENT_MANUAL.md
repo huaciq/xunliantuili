@@ -367,7 +367,7 @@ sudo systemctl restart train-platform-api
 
 部署验收时，使用已跑通的样例 ONNX 和对应校准数据，从网页转换并下载 NB，检查下载文件能正常加载。转换失败时通过 `journalctl -u train-platform-api` 查看宿主机脚本退出码和日志末尾。
 
-`zys` 分支中的新版点位转换器位于 `converters/point`。通过 `scripts/deploy_point_converter.py` 可将它安装到 `/opt/glh-converter-zys`，更新指定实例的 `.env`，并使用逐图精度与实际 NB 接口校验。完整拉取、部署和重启命令见 [转换器部署说明](converters/point/README.md)。
+`zys` 分支中的点位转换器位于 `converters/point`，沿用同学提供的原版转换流程。通过 `scripts/deploy_point_converter.py` 可将它安装到 `/opt/glh-converter-zys` 并更新指定实例的 `.env`。平台读取原有日志显示转换阶段进度和已用时，转换源码和参数保持原版。进度功能需要重启 API 并构建发布前端，已部署的转换器无需重新安装。完整命令见 [转换器部署说明](converters/point/README.md)。
 
 ## 6. SSH、重启和服务状态
 

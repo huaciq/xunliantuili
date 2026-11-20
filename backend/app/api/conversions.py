@@ -4,8 +4,9 @@ from shutil import copyfileobj
 from tempfile import TemporaryDirectory
 from threading import Lock
 from typing import Annotated, BinaryIO
+from uuid import UUID
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from starlette.background import BackgroundTask
@@ -33,6 +34,7 @@ from app.services.nb_conversion import (
     nb_conversion_status,
     stage_calibration_dataset,
 )
+from app.services.nb_conversion_progress import get_progress, start_progress
 from app.services.scheduler import _resolve_storage_path
 
 router = APIRouter(tags=["模型转换"])
@@ -105,6 +107,7 @@ def convert_onnx(
     dataset_version_id: Annotated[
         str | None, Form(description="校准数据集版本，省略时使用匹配 ONNX 的原训练数据集")
     ] = None,
+    conversion_id: Annotated[UUID | None, Header(alias="X-NB-Conversion-ID")] = None,
 ) -> FileResponse:
     project = load_project(db, project_id)
     _ensure_conversion_access(db, project, user)
@@ -143,8 +146,21 @@ def convert_onnx(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="数据集目录不可用") from exc
+    progress_owner = (str(project.id), str(user.id))
     db.close()
-    return _convert_model(filename, file.file, dataset_root, training_split)
+    return _convert_model(
+        filename, file.file, dataset_root, training_split, conversion_id, progress_owner,
+    )
+
+
+@router.get("/projects/{project_id}/conversions/onnx-to-nb/progress/{conversion_id}")
+def conversion_progress(
+    project_id: str, conversion_id: UUID, response: Response, db: DbSession, user: CurrentUser,
+):
+    project = load_project(db, project_id)
+    _ensure_conversion_access(db, project, user)
+    response.headers["Cache-Control"] = "no-store"
+    return get_progress(conversion_id, str(project.id), str(user.id))
 
 
 @router.post(
@@ -153,7 +169,8 @@ def convert_onnx(
     summary="使用训练产物转换为 NB",
 )
 def convert_run_onnx(
-    run_id: str, artifact_id: str, db: DbSession, user: CurrentUser
+    run_id: str, artifact_id: str, db: DbSession, user: CurrentUser,
+    conversion_id: Annotated[UUID | None, Header(alias="X-NB-Conversion-ID")] = None,
 ) -> FileResponse:
     run = db.get(TrainingRun, run_id)
     if run is None:
@@ -205,9 +222,12 @@ def convert_run_onnx(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="数据集目录不可用") from exc
     filename = PurePosixPath(artifact.name).name
+    progress_owner = (str(project.id), str(user.id))
     db.close()
     with model.open("rb") as file:
-        return _convert_model(filename, file, dataset_root, training_split)
+        return _convert_model(
+            filename, file, dataset_root, training_split, conversion_id, progress_owner,
+        )
 
 
 def _run_artifact_path(storage: Path, output_root: Path, artifact: RunArtifact) -> Path:
@@ -243,12 +263,16 @@ def _validate_onnx(filename: str, size: int | None) -> None:
 
 
 def _convert_model(
-    filename: str, file: BinaryIO, dataset_root: Path, training_split: Path | None
+    filename: str, file: BinaryIO, dataset_root: Path, training_split: Path | None,
+    conversion_id: UUID | None = None, progress_owner: tuple[str, str] | None = None,
 ) -> FileResponse:
     if not conversion_slot.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="已有模型正在转换，请稍后重试")
     workspace = None
+    progress = None
     try:
+        if conversion_id is not None and progress_owner is not None:
+            progress = start_progress(conversion_id, *progress_owner)
         try:
             workspace = TemporaryDirectory(prefix="platform-", dir=conversion_task_root())
         except OSError as exc:
@@ -259,15 +283,27 @@ def _convert_model(
         dataset = stage_calibration_dataset(dataset_root, root, training_split)
         with source.open("wb") as target:
             copyfileobj(file, target)
-        output = convert_to_nb(source, dataset, output_dir)
-        return FileResponse(
+        if progress:
+            output = convert_to_nb(source, dataset, output_dir, progress=progress)
+        else:
+            output = convert_to_nb(source, dataset, output_dir)
+        response = FileResponse(
             output,
             media_type="application/octet-stream",
             filename=f"{PurePosixPath(filename).stem[:200]}.nb",
             headers={"Cache-Control": "no-store"},
             background=BackgroundTask(workspace.cleanup),
         )
-    except Exception:
+        if progress:
+            progress.succeed()
+        return response
+    except Exception as exc:
+        if progress:
+            message = (
+                str(exc.detail) if isinstance(exc, HTTPException)
+                else "模型转换失败，请查看转换日志"
+            )
+            progress.fail(message)
         if workspace is not None:
             workspace.cleanup()
         raise

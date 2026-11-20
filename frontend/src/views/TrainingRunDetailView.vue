@@ -6,6 +6,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 
 import { useRoute, useRouter } from 'vue-router'
 
 import api, { errorMessage, websocketUrl } from '../api'
+import NbConversionProgress from '../components/NbConversionProgress.vue'
+import { useNbConversionProgress } from '../composables/useNbConversionProgress'
 import { useAuthStore } from '../stores/auth'
 import type { MetricPoint, Project, RunArtifact, TrainingRun, TrainingRunStatus } from '../types'
 
@@ -22,6 +24,10 @@ const conversionProject = ref<Project | null>(null)
 const convertingId = ref<string | null>(null)
 const nbFailure = ref('')
 const nbResult = shallowRef<{ artifactId: string; file: Blob; name: string } | null>(null)
+const {
+  progress: nbProgress, warning: nbProgressWarning, elapsedSeconds: nbElapsedSeconds,
+  start: startNbProgress, succeed: finishNbProgress, fail: failNbProgress,
+} = useNbConversionProgress()
 const loading = ref(false)
 const registering = ref(false)
 const showRegister = ref(false)
@@ -121,16 +127,19 @@ async function convertToNb(artifact: RunArtifact) {
   convertingId.value = artifact.id
   nbFailure.value = ''
   try {
+    const conversionId = startNbProgress(currentRun.project_id)
     const response = await api.post<Blob>(
       `/runs/${currentRun.id}/artifacts/${artifact.id}/conversions/onnx-to-nb`,
       undefined,
-      { responseType: 'blob', timeout: 0 },
+      { responseType: 'blob', timeout: 0, headers: { 'X-NB-Conversion-ID': conversionId } },
     )
     const basename = artifact.name.split('/').at(-1) ?? artifact.name
     const stem = Array.from(basename.slice(0, -5)).slice(0, 200).join('')
     nbResult.value = { artifactId: artifact.id, file: response.data, name: `${stem}.nb` }
+    finishNbProgress()
   } catch (error) {
     nbFailure.value = await conversionError(error)
+    failNbProgress(nbFailure.value)
   } finally {
     convertingId.value = null
   }
@@ -232,6 +241,7 @@ onBeforeUnmount(() => {
           <NAlert v-if="nbFailure" type="error" class="conversion-notice" title="NB 转换失败">
             {{ nbFailure }}
           </NAlert>
+          <NbConversionProgress :progress="nbProgress" :elapsed-seconds="nbElapsedSeconds" :warning="nbProgressWarning" />
           <div class="artifact-list">
             <div v-for="artifact in artifacts" :key="artifact.id" class="artifact-row">
               <div><strong>{{ artifact.name }}</strong><span>{{ artifact.artifact_type }} · {{ formatBytes(artifact.size_bytes) }}</span></div>
